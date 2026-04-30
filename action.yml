@@ -69,10 +69,9 @@ runs:
         ROOTFS_DIR="${RUNNER_TEMP:-/tmp}/x86_64-rootfs"
         mkdir -p "$ROOTFS_DIR"
 
-        # Create a throwaway amd64 container and export its filesystem
+        # Create a throwaway amd64 container and export its full filesystem
         CID=$(docker create --platform linux/amd64 ubuntu:22.04 /bin/true)
-        docker export "$CID" | tar -x -C "$ROOTFS_DIR" lib lib64 usr/lib 2>/dev/null || \
-          docker export "$CID" | tar -x -C "$ROOTFS_DIR"
+        docker export "$CID" | tar -x -C "$ROOTFS_DIR"
         docker rm "$CID" > /dev/null
 
         echo "rootfs-dir=$ROOTFS_DIR" >> "$GITHUB_OUTPUT"
@@ -183,7 +182,7 @@ runs:
         ls -la /tmp/jdk-arm64-extract/
 
         # Find the JDK directory (could be jdk-VERSION or jdk-VERSION+BUILD)
-        JDK_EXTRACTED=$(find /tmp/jdk-arm64-extract -maxdepth 1 -type d -name "jdk*" | head -1)
+        JDK_EXTRACTED=$(find /tmp/jdk-arm64-extract -mindepth 1 -maxdepth 1 -type d | head -1)
 
         if [ -z "$JDK_EXTRACTED" ]; then
           echo "::error::Failed to find JDK directory after extraction"
