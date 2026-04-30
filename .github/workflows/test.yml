@@ -75,8 +75,13 @@ jobs:
         run: |
           echo "QEMU_LD_PREFIX=$QEMU_LD_PREFIX"
           test -n "$QEMU_LD_PREFIX"
-          test -f "$QEMU_LD_PREFIX/lib64/ld-linux-x86-64.so.2"
-          echo "Dynamic linker present at $QEMU_LD_PREFIX/lib64/ld-linux-x86-64.so.2"
+          echo "Rootfs contents:"
+          ls -la "$QEMU_LD_PREFIX/" | head -20
+          ls -la "$QEMU_LD_PREFIX/lib64/" 2>/dev/null || ls -la "$QEMU_LD_PREFIX/lib/" 2>/dev/null || true
+          # The dynamic linker could be at lib64/ or lib/x86_64-linux-gnu/
+          LD_PATH=$(find "$QEMU_LD_PREFIX" -name "ld-linux-x86-64.so*" -type f -o -name "ld-linux-x86-64.so*" -type l 2>/dev/null | head -1)
+          test -n "$LD_PATH"
+          echo "Dynamic linker found at: $LD_PATH"
 
       - name: Verify x86_64 binary execution via QEMU
         run: |
