@@ -1,0 +1,250 @@
+name: 'Setup CodeQL on ARM64'
+description: 'Patches CodeQL to run on ARM64 Linux via QEMU user-mode emulation for native x86_64 binaries and an ARM64 JDK for the evaluation engine.'
+author: 'Community'
+
+branding:
+  icon: 'shield'
+  color: 'purple'
+
+inputs:
+  codeql-version:
+    description: 'CodeQL CLI version to install (e.g. v2.25.2). Defaults to latest.'
+    required: false
+    default: 'latest'
+  java-version:
+    description: 'Temurin JDK major version override. Auto-detected from the bundled JDK release file if not specified.'
+    required: false
+    default: ''
+  codeql-path:
+    description: 'Path to an existing CodeQL installation to patch. If empty, downloads CodeQL.'
+    required: false
+    default: ''
+  enable-compiled-languages:
+    description: |
+      Set to 'true' if you need to scan C/C++ or other compiled languages.
+      This extracts an x86_64 rootfs from a Docker image and sets QEMU_LD_PREFIX
+      so that dynamically-linked x86_64 tracer binaries (preload_tracer, runner)
+      can resolve glibc and run under QEMU. Not needed for interpreted languages
+      (Python, JavaScript, Ruby, Go, Java, C#) whose extractors are Java-based.
+    required: false
+    default: 'false'
+
+outputs:
+  codeql-path:
+    description: 'Path to the patched CodeQL installation'
+    value: ${{ steps.finalize.outputs.codeql-path }}
+  codeql-version:
+    description: 'Installed CodeQL version'
+    value: ${{ steps.finalize.outputs.codeql-version }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Detect architecture
+      id: arch
+      shell: bash
+      run: |
+        ARCH=$(uname -m)
+        echo "arch=$ARCH" >> "$GITHUB_OUTPUT"
+        if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
+          echo "is_arm64=true" >> "$GITHUB_OUTPUT"
+          echo "::notice::Running on ARM64 ($ARCH) — will patch CodeQL for ARM64 support"
+        else
+          echo "is_arm64=false" >> "$GITHUB_OUTPUT"
+          echo "::notice::Running on $ARCH — no patching needed, using CodeQL natively"
+        fi
+
+    - name: Setup QEMU for x86_64 binary translation
+      if: steps.arch.outputs.is_arm64 == 'true'
+      uses: docker/setup-qemu-action@v3
+      with:
+        platforms: linux/amd64
+
+    - name: Extract x86_64 rootfs for compiled language support
+      id: rootfs
+      if: steps.arch.outputs.is_arm64 == 'true' && inputs.enable-compiled-languages == 'true'
+      shell: bash
+      run: |
+        echo "::group::Extracting x86_64 rootfs for QEMU_LD_PREFIX"
+        ROOTFS_DIR="${RUNNER_TEMP:-/tmp}/x86_64-rootfs"
+        mkdir -p "$ROOTFS_DIR"
+
+        # Create a throwaway amd64 container and export its filesystem
+        CID=$(docker create --platform linux/amd64 ubuntu:22.04 /bin/true)
+        docker export "$CID" | tar -x -C "$ROOTFS_DIR" --include='lib/*' --include='lib64/*' --include='usr/lib/*'
+        docker rm "$CID" > /dev/null
+
+        echo "rootfs-dir=$ROOTFS_DIR" >> "$GITHUB_OUTPUT"
+        echo "x86_64 rootfs extracted to $ROOTFS_DIR"
+        ls -la "$ROOTFS_DIR/lib64/" 2>/dev/null || true
+        echo "::endgroup::"
+
+    - name: Set QEMU_LD_PREFIX
+      if: steps.arch.outputs.is_arm64 == 'true' && inputs.enable-compiled-languages == 'true'
+      shell: bash
+      run: |
+        echo "QEMU_LD_PREFIX=${{ steps.rootfs.outputs.rootfs-dir }}" >> "$GITHUB_ENV"
+
+    - name: Determine CodeQL version
+      id: version
+      if: steps.arch.outputs.is_arm64 == 'true'
+      shell: bash
+      run: |
+        if [ "${{ inputs.codeql-version }}" = "latest" ]; then
+          VERSION=$(curl -sI "https://github.com/github/codeql-cli-binaries/releases/latest" | grep -i ^location | sed 's|.*/tag/||' | tr -d '\r\n')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+        else
+          echo "version=${{ inputs.codeql-version }}" >> "$GITHUB_OUTPUT"
+        fi
+        echo "::notice::Using CodeQL version: $(cat "$GITHUB_OUTPUT" | grep version | cut -d= -f2)"
+
+    - name: Download or locate CodeQL
+      id: download
+      if: steps.arch.outputs.is_arm64 == 'true'
+      shell: bash
+      run: |
+        if [ -n "${{ inputs.codeql-path }}" ] && [ -d "${{ inputs.codeql-path }}" ]; then
+          CODEQL_DIR="${{ inputs.codeql-path }}"
+          echo "Using existing CodeQL at: $CODEQL_DIR"
+        else
+          CODEQL_DIR="${RUNNER_TOOL_CACHE:-$HOME/.codeql}/codeql-arm64"
+          mkdir -p "$CODEQL_DIR"
+          VERSION="${{ steps.version.outputs.version }}"
+
+          echo "::group::Downloading CodeQL $VERSION (linux64)"
+          DOWNLOAD_URL="https://github.com/github/codeql-cli-binaries/releases/download/${VERSION}/codeql-linux64.zip"
+          curl -sL "$DOWNLOAD_URL" -o /tmp/codeql-linux64.zip
+          unzip -qo /tmp/codeql-linux64.zip -d "$CODEQL_DIR"
+          rm /tmp/codeql-linux64.zip
+          # The zip extracts to a 'codeql' subdirectory
+          CODEQL_DIR="$CODEQL_DIR/codeql"
+          echo "::endgroup::"
+        fi
+        echo "codeql-dir=$CODEQL_DIR" >> "$GITHUB_OUTPUT"
+
+    - name: Install ARM64 JDK
+      if: steps.arch.outputs.is_arm64 == 'true'
+      shell: bash
+      run: |
+        CODEQL_DIR="${{ steps.download.outputs.codeql-dir }}"
+        JAVA_MAJOR="${{ inputs.java-version }}"
+
+        # Auto-detect Java major version from bundled JDK
+        BUNDLED_VERSION=""
+        if [ -f "$CODEQL_DIR/tools/linux64/java/release" ]; then
+          BUNDLED_VERSION=$(grep "JAVA_VERSION=" "$CODEQL_DIR/tools/linux64/java/release" | cut -d'"' -f2)
+          echo "Bundled JDK version: $BUNDLED_VERSION"
+          if [ -z "$JAVA_MAJOR" ]; then
+            JAVA_MAJOR=$(echo "$BUNDLED_VERSION" | cut -d'.' -f1)
+            echo "Auto-detected Java major version: $JAVA_MAJOR"
+          fi
+        fi
+
+        # Fallback if detection fails
+        if [ -z "$JAVA_MAJOR" ]; then
+          JAVA_MAJOR="21"
+          echo "::warning::Could not detect Java version, defaulting to $JAVA_MAJOR"
+        fi
+
+        echo "::group::Installing ARM64 Temurin JDK ${JAVA_MAJOR}"
+
+        # Try exact bundled version first, fall back to latest GA of the major
+        JDK_URL=""
+        if [ -n "$BUNDLED_VERSION" ]; then
+          ADOPTIUM_VER=$(echo "$BUNDLED_VERSION" | sed 's/+/%2B/')
+          JDK_URL="https://api.adoptium.net/v3/binary/version/jdk-${ADOPTIUM_VER}/linux/aarch64/jdk/hotspot/normal/eclipse?project=jdk"
+          HTTP_CODE=$(curl -sI -o /dev/null -w "%{http_code}" -L "$JDK_URL")
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "Exact version jdk-${BUNDLED_VERSION} not available for aarch64, falling back to latest ${JAVA_MAJOR}.x"
+            JDK_URL=""
+          fi
+        fi
+
+        if [ -z "$JDK_URL" ]; then
+          JDK_URL="https://api.adoptium.net/v3/binary/latest/${JAVA_MAJOR}/ga/linux/aarch64/jdk/hotspot/normal/eclipse?project=jdk"
+        fi
+
+        curl -sL "$JDK_URL" -o /tmp/jdk-arm64.tar.gz
+
+        mkdir -p /tmp/jdk-arm64-extract
+        tar xzf /tmp/jdk-arm64.tar.gz -C /tmp/jdk-arm64-extract
+        JDK_EXTRACTED=$(find /tmp/jdk-arm64-extract -maxdepth 1 -type d -name "jdk-*" | head -1)
+
+        if [ -z "$JDK_EXTRACTED" ]; then
+          echo "::error::Failed to extract ARM64 JDK"
+          exit 1
+        fi
+
+        # Place ARM64 JDK alongside the bundled x86_64 one
+        rm -rf "$CODEQL_DIR/tools/linux64/java-aarch64"
+        mv "$JDK_EXTRACTED" "$CODEQL_DIR/tools/linux64/java-aarch64"
+
+        echo "Installed: $("$CODEQL_DIR/tools/linux64/java-aarch64/bin/java" -version 2>&1 | head -1)"
+        rm -rf /tmp/jdk-arm64.tar.gz /tmp/jdk-arm64-extract
+        echo "::endgroup::"
+
+    - name: Patch CodeQL launcher script
+      if: steps.arch.outputs.is_arm64 == 'true'
+      shell: bash
+      run: |
+        CODEQL_DIR="${{ steps.download.outputs.codeql-dir }}"
+        LAUNCHER="$CODEQL_DIR/codeql"
+
+        echo "::group::Patching CodeQL launcher for Linux ARM64"
+
+        if grep -q 'linux64.*aarch64.*java-aarch64' "$LAUNCHER"; then
+          echo "Launcher already patched for Linux ARM64"
+        else
+          python3 - "$LAUNCHER" << 'PYEOF'
+        import sys
+        launcher_path = sys.argv[1]
+        with open(launcher_path, 'r') as f:
+            content = f.read()
+
+        OLD = 'if [ "$CODEQL_PLATFORM" = "osx64" ] && [ "$arch" = "arm64" ]; then\n    : ${CODEQL_JAVA_HOME:=$CODEQL_DIST/tools/$CODEQL_PLATFORM/java-aarch64}\nelse\n    : ${CODEQL_JAVA_HOME:=$CODEQL_DIST/tools/$CODEQL_PLATFORM/java}\nfi'
+        NEW = 'if [ "$CODEQL_PLATFORM" = "osx64" ] && [ "$arch" = "arm64" ]; then\n    : ${CODEQL_JAVA_HOME:=$CODEQL_DIST/tools/$CODEQL_PLATFORM/java-aarch64}\nelif [ "$CODEQL_PLATFORM" = "linux64" ] && [ "$arch" = "aarch64" ]; then\n    : ${CODEQL_JAVA_HOME:=$CODEQL_DIST/tools/$CODEQL_PLATFORM/java-aarch64}\nelse\n    : ${CODEQL_JAVA_HOME:=$CODEQL_DIST/tools/$CODEQL_PLATFORM/java}\nfi'
+
+        if OLD in content:
+            content = content.replace(OLD, NEW)
+            with open(launcher_path, 'w') as f:
+                f.write(content)
+            print("Launcher patched successfully")
+        else:
+            print("Pattern not found — will rely on CODEQL_JAVA_HOME env var fallback")
+        PYEOF
+        fi
+
+        echo "::endgroup::"
+
+    - name: Finalize setup
+      id: finalize
+      if: steps.arch.outputs.is_arm64 == 'true'
+      shell: bash
+      run: |
+        CODEQL_DIR="${{ steps.download.outputs.codeql-dir }}"
+
+        # Add to PATH
+        echo "$CODEQL_DIR" >> "$GITHUB_PATH"
+
+        # Set CODEQL_JAVA_HOME as env fallback
+        echo "CODEQL_JAVA_HOME=$CODEQL_DIR/tools/linux64/java-aarch64" >> "$GITHUB_ENV"
+
+        # Verify
+        echo "::group::Verification"
+        echo "Architecture: $(uname -m)"
+        "$CODEQL_DIR/codeql" --version
+        "$CODEQL_DIR/codeql" resolve languages 2>&1 | head -5
+        echo "::endgroup::"
+
+        # Outputs
+        echo "codeql-path=$CODEQL_DIR" >> "$GITHUB_OUTPUT"
+        echo "codeql-version=${{ steps.version.outputs.version }}" >> "$GITHUB_OUTPUT"
+
+    - name: Pass-through (non-ARM64)
+      if: steps.arch.outputs.is_arm64 == 'false'
+      shell: bash
+      run: |
+        echo "::notice::Not ARM64 — no patching needed. Use github/codeql-action directly."
+        if [ -n "${{ inputs.codeql-path }}" ] && [ -d "${{ inputs.codeql-path }}" ]; then
+          echo "codeql-path=${{ inputs.codeql-path }}" >> "$GITHUB_OUTPUT"
+        fi
