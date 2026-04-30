@@ -22,10 +22,11 @@ inputs:
   enable-compiled-languages:
     description: |
       Set to 'true' if you need to scan C/C++ or other compiled languages.
-      This extracts an x86_64 rootfs from a Docker image and sets QEMU_LD_PREFIX
-      so that dynamically-linked x86_64 tracer binaries (preload_tracer, runner)
-      can resolve glibc and run under QEMU. Not needed for interpreted languages
-      (Python, JavaScript, Ruby, Go, Java, C#) whose extractors are Java-based.
+      This downloads an official Ubuntu 22.04 amd64 base tarball (~30 MB) and
+      sets QEMU_LD_PREFIX so that dynamically-linked x86_64 tracer binaries
+      (preload_tracer, runner) can resolve glibc and run under QEMU. Not needed
+      for interpreted languages (Python, JS, Ruby, Go, Java, C#) whose
+      extractors are Java-based.
     required: false
     default: 'false'
 
@@ -60,23 +61,22 @@ runs:
       with:
         platforms: linux/amd64
 
-    - name: Extract x86_64 rootfs for compiled language support
+    - name: Download x86_64 rootfs for compiled language support
       id: rootfs
       if: steps.arch.outputs.is_arm64 == 'true' && inputs.enable-compiled-languages == 'true'
       shell: bash
       run: |
-        echo "::group::Extracting x86_64 rootfs for QEMU_LD_PREFIX"
+        echo "::group::Downloading x86_64 rootfs for QEMU_LD_PREFIX"
         ROOTFS_DIR="${RUNNER_TEMP:-/tmp}/x86_64-rootfs"
         mkdir -p "$ROOTFS_DIR"
 
-        # Create a throwaway amd64 container and export its full filesystem
-        CID=$(docker create --platform linux/amd64 ubuntu:22.04 /bin/true)
-        docker export "$CID" | tar -x -C "$ROOTFS_DIR"
-        docker rm "$CID" > /dev/null
+        # Download official Ubuntu 22.04 amd64 base tarball (~30 MB)
+        ROOTFS_URL="https://cdimage.ubuntu.com/ubuntu-base/releases/22.04/release/ubuntu-base-22.04-base-amd64.tar.gz"
+        curl -sL "$ROOTFS_URL" | tar xz -C "$ROOTFS_DIR"
 
         echo "rootfs-dir=$ROOTFS_DIR" >> "$GITHUB_OUTPUT"
         echo "x86_64 rootfs extracted to $ROOTFS_DIR"
-        ls -la "$ROOTFS_DIR/lib64/" 2>/dev/null || true
+        ls -la "$ROOTFS_DIR/lib64/" 2>/dev/null || ls -la "$ROOTFS_DIR/lib/" 2>/dev/null | head -5 || true
         echo "::endgroup::"
 
     - name: Set QEMU_LD_PREFIX

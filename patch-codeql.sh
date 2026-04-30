@@ -15,7 +15,7 @@
 #   4. Patches the launcher script to use it on aarch64
 #
 # Prerequisites:
-#   - Docker (for QEMU binfmt registration and x86_64 rootfs extraction)
+#   - Docker (for QEMU binfmt registration)
 #   - curl, tar, python3
 #
 # For interpreted languages (Python, JS, Ruby, Go, Java, C#):
@@ -23,7 +23,7 @@
 #   tonistiigi/binfmt --install amd64`) is sufficient.
 #
 # For compiled languages (C/C++):
-#   Also run: ./setup-x86_64-rootfs.sh (extracts rootfs and sets QEMU_LD_PREFIX)
+#   Also download the Ubuntu amd64 rootfs and set QEMU_LD_PREFIX (see below)
 #
 set -euo pipefail
 
@@ -152,8 +152,8 @@ echo ""
 echo "    QEMU binfmt setup (if not already done):"
 echo "      docker run --privileged --rm tonistiigi/binfmt --install amd64"
 echo ""
-echo "    For compiled languages (C/C++), also extract x86_64 rootfs:"
-echo "      CID=\$(docker create --platform linux/amd64 ubuntu:22.04 /bin/true)"
-echo "      docker export \$CID | tar -x -C /tmp/x86_64-rootfs --include='lib/*' --include='lib64/*' --include='usr/lib/*'"
-echo "      docker rm \$CID"
+echo "    For compiled languages (C/C++), also download the x86_64 rootfs:"
+echo "      mkdir -p /tmp/x86_64-rootfs"
+echo "      curl -sL https://cdimage.ubuntu.com/ubuntu-base/releases/22.04/release/ubuntu-base-22.04-base-amd64.tar.gz \\"
+echo "        | tar xz -C /tmp/x86_64-rootfs"
 echo "      export QEMU_LD_PREFIX=/tmp/x86_64-rootfs"
