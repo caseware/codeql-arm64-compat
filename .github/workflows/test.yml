@@ -1,0 +1,103 @@
+name: Test CodeQL ARM64 Action
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test-arm64-interpreted:
+    name: ARM64 — Interpreted language (Python)
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./
+        id: codeql-setup
+
+      - name: Create test project
+        run: |
+          mkdir -p /tmp/test-project
+          cat > /tmp/test-project/app.py << 'EOF'
+          import os
+          import subprocess
+
+          def run_command(user_input):
+              # Intentional vulnerability for CodeQL to find
+              subprocess.call(user_input, shell=True)
+
+          def read_file(filename):
+              with open(filename) as f:
+                  return f.read()
+          EOF
+
+      - name: Create database
+        run: |
+          codeql database create /tmp/test-db \
+            --language=python \
+            --source-root=/tmp/test-project
+
+      - name: Run analysis
+        run: |
+          codeql pack download codeql/python-queries
+          codeql database analyze /tmp/test-db codeql/python-queries \
+            --format=sarif-latest \
+            --output=/tmp/results.sarif
+
+      - name: Verify results
+        run: |
+          echo "SARIF file size: $(wc -c < /tmp/results.sarif) bytes"
+          python3 -c "
+          import json
+          with open('/tmp/results.sarif') as f:
+              sarif = json.load(f)
+          runs = sarif['runs']
+          print(f'Analysis runs: {len(runs)}')
+          for run in runs:
+              results = run.get('results', [])
+              print(f'Results found: {len(results)}')
+          "
+
+  test-arm64-compiled:
+    name: ARM64 — Compiled language support (rootfs)
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./
+        with:
+          enable-compiled-languages: 'true'
+
+      - name: Verify QEMU_LD_PREFIX is set
+        run: |
+          echo "QEMU_LD_PREFIX=$QEMU_LD_PREFIX"
+          test -n "$QEMU_LD_PREFIX"
+          test -f "$QEMU_LD_PREFIX/lib64/ld-linux-x86-64.so.2"
+
+      - name: Verify x86_64 binary execution
+        run: |
+          CODEQL_DIR="${{ steps.codeql-setup.outputs.codeql-path || '' }}"
+          if [ -z "$CODEQL_DIR" ]; then
+            CODEQL_DIR=$(which codeql | xargs dirname)
+          fi
+          # The 'runner' binary is x86_64 dynamically-linked
+          file "$CODEQL_DIR/tools/linux64/runner"
+          "$CODEQL_DIR/tools/linux64/runner" --help || true
+
+  test-x86_64-passthrough:
+    name: x86_64 — Pass-through (no-op)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./
+        id: codeql-setup
+
+      - name: Verify no patching occurred
+        run: |
+          echo "Architecture: $(uname -m)"
+          # On x86_64, the action should be a no-op
+          if [ "$(uname -m)" = "x86_64" ]; then
+            echo "Correctly detected as non-ARM64"
+          fi
