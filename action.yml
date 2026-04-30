@@ -166,31 +166,22 @@ runs:
 
         curl -sL "$JDK_URL" -o /tmp/jdk-arm64.tar.gz
 
-        # Verify download
-        FILE_SIZE=$(stat -c%s /tmp/jdk-arm64.tar.gz 2>/dev/null || stat -f%z /tmp/jdk-arm64.tar.gz 2>/dev/null || echo 0)
-        echo "Downloaded JDK archive: ${FILE_SIZE} bytes"
+        # Verify download succeeded
+        FILE_SIZE=$(stat -c%s /tmp/jdk-arm64.tar.gz 2>/dev/null || echo 0)
         if [ "$FILE_SIZE" -lt 1000000 ]; then
-          echo "::error::Download too small (${FILE_SIZE} bytes) — likely a failed download"
-          echo "URL was: $JDK_URL"
-          head -c 200 /tmp/jdk-arm64.tar.gz || true
+          echo "::error::JDK download failed (${FILE_SIZE} bytes). URL: $JDK_URL"
           exit 1
         fi
 
         mkdir -p /tmp/jdk-arm64-extract
         tar xzf /tmp/jdk-arm64.tar.gz -C /tmp/jdk-arm64-extract
-        echo "Extracted contents:"
-        ls -la /tmp/jdk-arm64-extract/
 
-        # Find the JDK directory (could be jdk-VERSION or jdk-VERSION+BUILD)
+        # Find the extracted JDK directory
         JDK_EXTRACTED=$(find /tmp/jdk-arm64-extract -mindepth 1 -maxdepth 1 -type d | head -1)
-
         if [ -z "$JDK_EXTRACTED" ]; then
           echo "::error::Failed to find JDK directory after extraction"
-          find /tmp/jdk-arm64-extract -maxdepth 2 -type d
           exit 1
         fi
-        echo "JDK directory: $JDK_EXTRACTED"
-        ls "$JDK_EXTRACTED/bin/" 2>/dev/null | head -5 || echo "No bin/ directory!"
 
         # Place ARM64 JDK alongside the bundled x86_64 one
         rm -rf "$CODEQL_DIR/tools/linux64/java-aarch64"
@@ -198,23 +189,19 @@ runs:
 
         JAVA_BIN="$CODEQL_DIR/tools/linux64/java-aarch64/bin/java"
 
-        # Diagnose dynamic linker issues (ELF "not found" = missing interpreter)
-        file "$JAVA_BIN"
+        # Fix ELF interpreter path if needed (some distros use different linker paths)
         INTERP=$(readelf -l "$JAVA_BIN" 2>/dev/null | grep "interpreter:" | sed 's/.*: \(.*\)]/\1/' || true)
         if [ -n "$INTERP" ] && [ ! -f "$INTERP" ]; then
-          echo "ELF interpreter $INTERP not found on this system — creating symlink"
           REAL_LD=$(find /lib /usr/lib -name "ld-linux-aarch64*" -type f 2>/dev/null | head -1)
           if [ -n "$REAL_LD" ]; then
             sudo mkdir -p "$(dirname "$INTERP")"
             sudo ln -sf "$REAL_LD" "$INTERP"
-            echo "Linked $INTERP -> $REAL_LD"
           else
-            echo "::warning::Could not find aarch64 dynamic linker on this system"
+            echo "::warning::ELF interpreter $INTERP not found and no aarch64 linker available"
           fi
         fi
 
-        ldd "$JAVA_BIN" 2>&1 || true
-        "$JAVA_BIN" -version 2>&1 | head -1
+        echo "Installed: $("$JAVA_BIN" -version 2>&1 | head -1)"
         rm -rf /tmp/jdk-arm64.tar.gz /tmp/jdk-arm64-extract
         echo "::endgroup::"
 
