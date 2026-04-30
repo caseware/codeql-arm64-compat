@@ -71,7 +71,8 @@ runs:
 
         # Create a throwaway amd64 container and export its filesystem
         CID=$(docker create --platform linux/amd64 ubuntu:22.04 /bin/true)
-        docker export "$CID" | tar -x -C "$ROOTFS_DIR" --include='lib/*' --include='lib64/*' --include='usr/lib/*'
+        docker export "$CID" | tar -x -C "$ROOTFS_DIR" lib lib64 usr/lib 2>/dev/null || \
+          docker export "$CID" | tar -x -C "$ROOTFS_DIR"
         docker rm "$CID" > /dev/null
 
         echo "rootfs-dir=$ROOTFS_DIR" >> "$GITHUB_OUTPUT"
@@ -179,7 +180,25 @@ runs:
         rm -rf "$CODEQL_DIR/tools/linux64/java-aarch64"
         mv "$JDK_EXTRACTED" "$CODEQL_DIR/tools/linux64/java-aarch64"
 
-        echo "Installed: $("$CODEQL_DIR/tools/linux64/java-aarch64/bin/java" -version 2>&1 | head -1)"
+        JAVA_BIN="$CODEQL_DIR/tools/linux64/java-aarch64/bin/java"
+
+        # Diagnose dynamic linker issues (ELF "not found" = missing interpreter)
+        file "$JAVA_BIN"
+        INTERP=$(readelf -l "$JAVA_BIN" 2>/dev/null | grep "interpreter:" | sed 's/.*: \(.*\)]/\1/' || true)
+        if [ -n "$INTERP" ] && [ ! -f "$INTERP" ]; then
+          echo "ELF interpreter $INTERP not found on this system — creating symlink"
+          REAL_LD=$(find /lib /usr/lib -name "ld-linux-aarch64*" -type f 2>/dev/null | head -1)
+          if [ -n "$REAL_LD" ]; then
+            sudo mkdir -p "$(dirname "$INTERP")"
+            sudo ln -sf "$REAL_LD" "$INTERP"
+            echo "Linked $INTERP -> $REAL_LD"
+          else
+            echo "::warning::Could not find aarch64 dynamic linker on this system"
+          fi
+        fi
+
+        ldd "$JAVA_BIN" 2>&1 || true
+        "$JAVA_BIN" -version 2>&1 | head -1
         rm -rf /tmp/jdk-arm64.tar.gz /tmp/jdk-arm64-extract
         echo "::endgroup::"
 
