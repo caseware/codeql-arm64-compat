@@ -11,7 +11,7 @@ This action works around the limitation with two techniques:
 1. **ARM64 JDK** — The CodeQL evaluation engine is pure Java (`tools/codeql.jar`). We replace the bundled x86_64 JDK with a matching ARM64 Temurin build so queries execute **natively** at full speed.
 2. **QEMU user-mode via `docker/setup-qemu-action`** — Registers `qemu-x86_64-static` as the kernel's `binfmt_misc` interpreter for x86_64 ELF binaries. Any remaining native x86_64 binaries (extractors, `runner`, tracer `.so` libs) execute transparently.
 
-For **compiled languages** (C/C++) that require dynamically-linked x86_64 tracer binaries, the action optionally extracts an x86_64 rootfs from a Docker image and sets `QEMU_LD_PREFIX` so the dynamic linker resolves correctly — no `apt`, no `dpkg --add-architecture`, no root.
+For **compiled languages** (C/C++) that require dynamically-linked x86_64 tracer binaries, the action optionally downloads an official Ubuntu 22.04 amd64 base tarball (~30 MB) and sets `QEMU_LD_PREFIX` so the dynamic linker resolves correctly — no `apt`, no `dpkg --add-architecture`, no root.
 
 ### Performance characteristics
 
@@ -59,7 +59,7 @@ jobs:
           enable-compiled-languages: 'true'
 ```
 
-This extracts an x86_64 rootfs from a Docker image and sets `QEMU_LD_PREFIX` so the dynamically-linked tracer binaries (`preload_tracer`, `runner`) can resolve glibc under QEMU. Not needed for interpreted languages.
+This downloads an Ubuntu 22.04 amd64 base tarball and sets `QEMU_LD_PREFIX` so the dynamically-linked tracer binaries (`preload_tracer`, `runner`) can resolve glibc under QEMU. Not needed for interpreted languages.
 
 ### With `github/codeql-action` (init/analyze pattern)
 
@@ -120,7 +120,7 @@ The JDK version is auto-detected from `tools/linux64/java/release`. Override onl
 | `codeql-version` | `latest` | CodeQL CLI release tag (e.g., `v2.25.2`) |
 | `java-version` | _(auto-detected)_ | Temurin JDK major version override (read from bundled JDK) |
 | `codeql-path` | _(empty)_ | Existing CodeQL path to patch in place |
-| `enable-compiled-languages` | `false` | Extract x86_64 rootfs and set `QEMU_LD_PREFIX` for C/C++ tracer binaries |
+| `enable-compiled-languages` | `false` | Download Ubuntu amd64 rootfs and set `QEMU_LD_PREFIX` for C/C++ tracer binaries |
 
 ## Outputs
 
@@ -150,7 +150,7 @@ The JDK version is auto-detected from `tools/linux64/java/release`. Override onl
 │  └──────────────────────┘    └─────────────┬──────────────┘ │
 │                                            │                │
 │                              ┌─────────────▼──────────────┐ │
-│                              │ x86_64 rootfs (Docker)     │ │
+│                              │ x86_64 rootfs (Ubuntu)     │ │
 │                              │ QEMU_LD_PREFIX=/tmp/rootfs  │ │
 │                              │ (only for compiled langs)   │ │
 │                              └────────────────────────────┘ │
@@ -184,11 +184,11 @@ Instead of manually installing `qemu-user-static` via apt, we use [`docker/setup
 
 For compiled-language scanning (C/C++), the CodeQL tracer binaries are dynamically linked against glibc. Rather than installing `libc6:amd64` via apt, we:
 
-1. `docker create --platform linux/amd64 ubuntu:22.04` — create a throwaway container
-2. `docker export` — extract its `/lib`, `/lib64`, and `/usr/lib` directories
+1. Download the [official Ubuntu 22.04 amd64 base tarball](https://cdimage.ubuntu.com/ubuntu-base/releases/22.04/release/) (~30 MB)
+2. Extract it to a temporary directory
 3. Set `QEMU_LD_PREFIX` — tells `qemu-user` where to find the x86_64 dynamic linker and shared libraries
 
-No apt, no dpkg, no root required for package management.
+No apt, no dpkg, no Docker required for the rootfs. Only Docker is needed for the QEMU binfmt registration (`docker/setup-qemu-action`).
 
 ### Why interpreted languages don't need the rootfs
 
@@ -257,9 +257,8 @@ docker run --privileged --rm tonistiigi/binfmt --install amd64
 
 # For compiled languages, also set up the rootfs:
 mkdir -p /tmp/x86_64-rootfs
-CID=$(docker create --platform linux/amd64 ubuntu:22.04 /bin/true)
-docker export $CID | tar -x -C /tmp/x86_64-rootfs --include='lib/*' --include='lib64/*' --include='usr/lib/*'
-docker rm $CID
+curl -sL https://cdimage.ubuntu.com/ubuntu-base/releases/22.04/release/ubuntu-base-22.04-base-amd64.tar.gz \
+  | tar xz -C /tmp/x86_64-rootfs
 export QEMU_LD_PREFIX=/tmp/x86_64-rootfs
 ```
 
@@ -273,4 +272,15 @@ Issues and PRs welcome. Key areas for improvement:
 
 ## License
 
-MIT
+This action's source code (action.yml, patch-codeql.sh, documentation) is released under the [MIT License](LICENSE).
+
+### Third-party components (fetched at runtime, not redistributed)
+
+| Component | License | How it's used |
+|-----------|---------|---------------|
+| [GitHub CodeQL CLI](https://github.com/github/codeql-cli-binaries) | [GitHub CodeQL Terms](https://github.com/github/codeql-cli-binaries/blob/main/LICENSE.md) | Downloaded at runtime from GitHub Releases. Free for open-source repos and GitHub Advanced Security customers. Not redistributed by this action. |
+| [Eclipse Temurin JDK](https://adoptium.net/) | [GPLv2 + Classpath Exception](https://openjdk.org/legal/gplv2+ce.html) | ARM64 JDK downloaded at runtime from the Adoptium API. Not redistributed. |
+| [Ubuntu base tarball](https://cdimage.ubuntu.com/ubuntu-base/) | Various (GPL, LGPL for glibc/coreutils) | amd64 rootfs downloaded at runtime when `enable-compiled-languages: 'true'`. Provides dynamic linker and shared libraries for QEMU. Not redistributed. |
+| [tonistiigi/binfmt](https://github.com/tonistiigi/binfmt) (via `docker/setup-qemu-action`) | MIT | QEMU static binaries registered with binfmt_misc. Pulled by Docker at runtime. Not redistributed. |
+
+Users are responsible for ensuring their use of CodeQL complies with [GitHub's CodeQL Terms and Conditions](https://github.com/github/codeql-cli-binaries/blob/main/LICENSE.md).
