@@ -9,9 +9,6 @@ on:
 
 permissions: {}
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
   # ───────────────────────────────────────────────────────────────────
   # Compatibility matrix — real-world projects, ARM64 vs x86_64
@@ -76,7 +73,7 @@ jobs:
     continue-on-error: ${{ matrix.arch.name == 'arm64' && matrix.language.arm64-build-mode == 'none' }}
     steps:
       - name: Checkout test project
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: ${{ matrix.language.project }}
           ref: ${{ matrix.language.ref }}
@@ -154,7 +151,7 @@ jobs:
 
       - name: Upload SARIF
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sarif-${{ matrix.language.name }}-${{ matrix.arch.name }}
           path: results.sarif
@@ -197,7 +194,7 @@ jobs:
 
       - name: Upload timing data
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: timing-${{ matrix.language.name }}-${{ matrix.arch.name }}
           path: timing.json
@@ -215,7 +212,7 @@ jobs:
       actions: read
     steps:
       - name: Download all SARIF artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: sarif-*
           path: sarifs
@@ -349,13 +346,13 @@ jobs:
             query-pack: "codeql/python-queries@~1.2.0"
     steps:
       - name: Checkout test project
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: pallets/flask
           ref: "3.1.1"
 
       - name: Checkout action
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           path: .codeql-arm64-action
 
@@ -406,7 +403,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Run action (populates or restores cache)
         id: setup
@@ -442,7 +439,7 @@ jobs:
       actions: read
     steps:
       - name: Download timing data
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: timing-*
           path: timings

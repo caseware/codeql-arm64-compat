@@ -59,14 +59,14 @@ runs:
 
     - name: Setup QEMU for x86_64 binary translation
       if: steps.arch.outputs.is_arm64 == 'true'
-      uses: docker/setup-qemu-action@v3
+      uses: docker/setup-qemu-action@v4
       with:
         platforms: linux/amd64
 
     - name: Restore cached x86_64 libs
       id: rootfs-cache
       if: steps.arch.outputs.is_arm64 == 'true' && inputs.enable-compiled-languages == 'true'
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: ${{ runner.temp }}/x86_64-rootfs
         key: x86_64-libs-ubuntu-22.04-glibc-v1
@@ -173,7 +173,7 @@ runs:
     - name: Restore cached CodeQL
       id: codeql-cache
       if: steps.arch.outputs.is_arm64 == 'true' && steps.download.outputs.source == 'download'
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: ${{ steps.download.outputs.codeql-dir }}
         key: codeql-linux64-${{ steps.version.outputs.version }}
@@ -225,7 +225,7 @@ runs:
     - name: Restore cached ARM64 JDK
       id: jdk-cache
       if: steps.arch.outputs.is_arm64 == 'true'
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: ${{ steps.download.outputs.codeql-dir }}/tools/linux64/java-aarch64
         key: jdk-aarch64-temurin-${{ steps.jdk-version.outputs.bundled-version || steps.jdk-version.outputs.java-major }}
@@ -335,7 +335,7 @@ runs:
     - name: Cache stub preload_tracer
       id: stub-cache
       if: steps.arch.outputs.is_arm64 == 'true'
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: ${{ runner.temp }}/preload_tracer-arm64
         key: stub-preload-tracer-arm64-v1
