@@ -32,10 +32,10 @@ inputs:
 
 outputs:
   codeql-path:
-    description: 'Path to the patched CodeQL installation'
+    description: 'Path to the patched CodeQL installation (ARM64 only; empty on x86_64 where CodeQL is already on PATH)'
     value: ${{ steps.finalize.outputs.codeql-path }}
   codeql-version:
-    description: 'Installed CodeQL version'
+    description: 'Installed CodeQL version (ARM64 only; empty on x86_64)'
     value: ${{ steps.finalize.outputs.codeql-version }}
 
 runs:
@@ -54,6 +54,8 @@ runs:
           echo "is_arm64=false" >> "$GITHUB_OUTPUT"
           echo "::notice::Running on $ARCH — no patching needed, using CodeQL natively"
         fi
+
+    # On x86_64, all remaining steps are skipped — CodeQL is already on PATH.
 
     - name: Setup QEMU for x86_64 binary translation
       if: steps.arch.outputs.is_arm64 == 'true'
@@ -119,6 +121,7 @@ runs:
 
     - name: Determine CodeQL version
       id: version
+      if: steps.arch.outputs.is_arm64 == 'true'
       shell: bash
       env:
         INPUT_CODEQL_VERSION: ${{ inputs.codeql-version }}
@@ -133,6 +136,7 @@ runs:
 
     - name: Locate or restore CodeQL
       id: download
+      if: steps.arch.outputs.is_arm64 == 'true'
       shell: bash
       env:
         INPUT_CODEQL_PATH: ${{ inputs.codeql-path }}
@@ -168,14 +172,14 @@ runs:
 
     - name: Restore cached CodeQL
       id: codeql-cache
-      if: steps.download.outputs.source == 'download'
+      if: steps.arch.outputs.is_arm64 == 'true' && steps.download.outputs.source == 'download'
       uses: actions/cache@v4
       with:
         path: ${{ steps.download.outputs.codeql-dir }}
         key: codeql-linux64-${{ steps.version.outputs.version }}
 
     - name: Download CodeQL
-      if: steps.download.outputs.source == 'download' && steps.codeql-cache.outputs.cache-hit != 'true'
+      if: steps.arch.outputs.is_arm64 == 'true' && steps.download.outputs.source == 'download' && steps.codeql-cache.outputs.cache-hit != 'true'
       shell: bash
       env:
         VERSION: ${{ steps.version.outputs.version }}
@@ -381,6 +385,7 @@ runs:
 
     - name: Finalize setup
       id: finalize
+      if: steps.arch.outputs.is_arm64 == 'true'
       shell: bash
       env:
         CODEQL_DIR: ${{ steps.download.outputs.codeql-dir }}
