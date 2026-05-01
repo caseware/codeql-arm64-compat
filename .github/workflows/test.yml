@@ -368,10 +368,11 @@ jobs:
 
       - name: Run CodeQL analysis
         run: |
+          # Use bundled queries (no --download) so older CodeQL versions
+          # aren't broken by newer query packs requiring unsupported features.
           codeql database analyze codeql-db \
             --format=sarif-latest \
             --output=results.sarif \
-            --download \
             codeql/python-queries 2>&1 | tail -10
 
       - name: Report results

@@ -406,6 +406,19 @@ runs:
         fi
         SAFE_DIR="$(cd "$CODEQL_DIR" && pwd -P)"
 
+        # Ensure canonicalized path is in a trusted runner-controlled location
+        case "$SAFE_DIR" in
+          "${RUNNER_TEMP:-/tmp}"/*|"${RUNNER_TOOL_CACHE:-/opt/hostedtoolcache}"/*|/opt/*|/usr/local/*)
+            ;;
+          *)
+            echo "::error::CODEQL_DIR resolved outside trusted locations: $SAFE_DIR"
+            exit 1 ;;
+        esac
+        if [ ! -x "$SAFE_DIR/codeql" ]; then
+          echo "::error::CodeQL executable not found or not executable: $SAFE_DIR/codeql"
+          exit 1
+        fi
+
         # Validate CODEQL_VER (strip any injected newlines)
         SAFE_VER=$(printf '%s' "$CODEQL_VER" | tr -d '\r\n')
 
