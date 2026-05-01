@@ -386,22 +386,44 @@ runs:
         CODEQL_DIR: ${{ steps.download.outputs.codeql-dir }}
         CODEQL_VER: ${{ steps.version.outputs.version }}
       run: |
+        # Validate CODEQL_DIR before writing to PATH / env / outputs
+        if [ -z "${CODEQL_DIR:-}" ]; then
+          echo "::error::CODEQL_DIR is empty"
+          exit 1
+        fi
+        case "$CODEQL_DIR" in
+          *$'\n'*|*$'\r'*)
+            echo "::error::CODEQL_DIR contains invalid newline characters"
+            exit 1 ;;
+          /*) ;;
+          *)
+            echo "::error::CODEQL_DIR must be an absolute path"
+            exit 1 ;;
+        esac
+        if [ ! -d "$CODEQL_DIR" ]; then
+          echo "::error::CODEQL_DIR does not exist: $CODEQL_DIR"
+          exit 1
+        fi
+        SAFE_DIR="$(cd "$CODEQL_DIR" && pwd -P)"
+
+        # Validate CODEQL_VER (strip any injected newlines)
+        SAFE_VER=$(printf '%s' "$CODEQL_VER" | tr -d '\r\n')
 
         # Add to PATH
-        echo "$CODEQL_DIR" >> "$GITHUB_PATH"
+        printf '%s\n' "$SAFE_DIR" >> "$GITHUB_PATH"
 
         # ARM64: point at the swapped JDK
         if [ "$(uname -m)" = "aarch64" ] || [ "$(uname -m)" = "arm64" ]; then
-          echo "CODEQL_JAVA_HOME=$CODEQL_DIR/tools/linux64/java-aarch64" >> "$GITHUB_ENV"
+          printf '%s\n' "CODEQL_JAVA_HOME=$SAFE_DIR/tools/linux64/java-aarch64" >> "$GITHUB_ENV"
         fi
 
         # Verify
         echo "::group::Verification"
         echo "Architecture: $(uname -m)"
-        "$CODEQL_DIR/codeql" --version
-        "$CODEQL_DIR/codeql" resolve languages 2>&1 | head -5
+        "$SAFE_DIR/codeql" --version
+        "$SAFE_DIR/codeql" resolve languages 2>&1 | head -5
         echo "::endgroup::"
 
         # Outputs
-        echo "codeql-path=$CODEQL_DIR" >> "$GITHUB_OUTPUT"
-        echo "codeql-version=$CODEQL_VER" >> "$GITHUB_OUTPUT"
+        printf 'codeql-path=%s\n' "$SAFE_DIR" >> "$GITHUB_OUTPUT"
+        printf 'codeql-version=%s\n' "$SAFE_VER" >> "$GITHUB_OUTPUT"
