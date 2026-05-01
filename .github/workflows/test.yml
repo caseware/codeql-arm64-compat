@@ -337,10 +337,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        codeql-version:
-          - "latest"
-          - "v2.25.2"
-          - "v2.20.0"
+        include:
+          - codeql-version: "latest"
+            query-pack: "codeql/python-queries"
+          - codeql-version: "v2.25.2"
+            query-pack: "codeql/python-queries"
+          - codeql-version: "v2.20.0"
+            query-pack: "codeql/python-queries@~1.2.0"
     steps:
       - name: Checkout test project
         uses: actions/checkout@v4
@@ -367,13 +370,15 @@ jobs:
             --overwrite 2>&1 | tail -20
 
       - name: Run CodeQL analysis
+        shell: bash
+        env:
+          QUERY_PACK: ${{ matrix.query-pack }}
         run: |
-          # Use bundled queries (no --download) so older CodeQL versions
-          # aren't broken by newer query packs requiring unsupported features.
           codeql database analyze codeql-db \
             --format=sarif-latest \
             --output=results.sarif \
-            codeql/python-queries 2>&1 | tail -10
+            --download \
+            "$QUERY_PACK" 2>&1 | tail -10
 
       - name: Report results
         shell: bash
