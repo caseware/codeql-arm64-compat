@@ -316,6 +316,36 @@ runs:
 
         echo "::endgroup::"
 
+    - name: Replace preload_tracer with ARM64 stub
+      if: steps.arch.outputs.is_arm64 == 'true'
+      shell: bash
+      run: |
+        CODEQL_DIR="${{ steps.download.outputs.codeql-dir }}"
+        TRACER="$CODEQL_DIR/tools/linux64/preload_tracer"
+        ACTION_DIR="${GITHUB_ACTION_PATH:-.}"
+
+        if [ -f "$TRACER" ]; then
+          echo "::group::Building ARM64 stub preload_tracer"
+          # Build from source in this action's repo
+          if [ -f "$ACTION_DIR/src/stub-tracer.c" ]; then
+            gcc -static -O2 -o "$TRACER" "$ACTION_DIR/src/stub-tracer.c"
+          else
+            # Inline fallback if action source isn't available
+            cat > /tmp/stub_tracer.c << 'STUBEOF'
+        #include <stdio.h>
+        int main(int argc, char *argv[]) {
+            fprintf(stderr, "[codeql-arm64-compat] Build tracing is NOT supported on ARM64.\n");
+            fprintf(stderr, "Use --build-mode=none for buildless analysis.\n");
+            return 1;
+        }
+        STUBEOF
+            gcc -static -O2 -o "$TRACER" /tmp/stub_tracer.c
+            rm -f /tmp/stub_tracer.c
+          fi
+          echo "Replaced preload_tracer with ARM64 native stub ($(file "$TRACER" | cut -d: -f2))"
+          echo "::endgroup::"
+        fi
+
     - name: Finalize setup
       id: finalize
       shell: bash

@@ -19,45 +19,59 @@ jobs:
       fail-fast: false
       matrix:
         language:
+          # --- Interpreted languages (same analysis mode on both archs) ---
           - name: python
             project: pallets/flask
             ref: "3.1.1"
             compiled: false
             build-cmd: ""
+            arm64-build-mode: ""
           - name: javascript
             project: expressjs/express
             ref: "4.21.2"
             compiled: false
             build-cmd: ""
+            arm64-build-mode: ""
           - name: ruby
             project: rack/rack
             ref: "v3.1.12"
             compiled: true
             build-cmd: ""
+            arm64-build-mode: ""
+          # --- Compiled languages (buildless on ARM64, traced on x86_64) ---
           - name: java
             project: google/gson
             ref: "gson-parent-2.12.1"
             compiled: true
             build-cmd: ""
+            arm64-build-mode: "none"
           - name: go
             project: gorilla/mux
             ref: "v1.8.1"
             compiled: true
             build-cmd: ""
+            arm64-build-mode: "none"
           - name: cpp
             project: DaveGamble/cJSON
             ref: "v1.7.18"
             compiled: true
             build-cmd: "mkdir build && cd build && cmake .. && make"
+            arm64-build-mode: "none"
+          - name: rust
+            project: nickel-org/nickel.rs
+            ref: "0.11.0"
+            compiled: true
+            build-cmd: ""
+            arm64-build-mode: "none"
         arch:
           - name: arm64
             runner: ubuntu-24.04-arm
           - name: x86_64
             runner: ubuntu-latest
 
-    # Compiled languages on ARM64 may fail — x86_64 tracer can't inject into
-    # ARM64 build processes. These are expected failures we document in the report.
-    continue-on-error: ${{ matrix.arch.name == 'arm64' && matrix.language.compiled == true }}
+    # Buildless mode on ARM64 may not be supported for all languages (e.g. Go).
+    # Interpreted languages and x86_64 jobs must always pass.
+    continue-on-error: ${{ matrix.arch.name == 'arm64' && matrix.language.arm64-build-mode == 'none' }}
     steps:
       - name: Checkout test project
         uses: actions/checkout@v4
@@ -77,9 +91,20 @@ jobs:
         run: |
           START_NS=$(date +%s%N)
 
+          ARCH=$(uname -m)
+          ARM64_MODE="${{ matrix.language.arm64-build-mode }}"
           BUILD_CMD="${{ matrix.language.build-cmd }}"
-          if [ -n "$BUILD_CMD" ]; then
-            # Write build script to avoid shell quoting issues with --command
+
+          if [ "$ARCH" = "aarch64" ] && [ -n "$ARM64_MODE" ]; then
+            # ARM64 buildless mode — analyse source without a build step
+            echo "Using --build-mode=$ARM64_MODE on ARM64"
+            codeql database create codeql-db \
+              --language="${{ matrix.language.name }}" \
+              --source-root=. \
+              --build-mode="$ARM64_MODE" \
+              --overwrite 2>&1 | tail -30
+          elif [ -n "$BUILD_CMD" ]; then
+            # Traced mode with explicit build command
             echo '#!/usr/bin/env bash' > .codeql-build.sh
             echo "$BUILD_CMD" >> .codeql-build.sh
             chmod +x .codeql-build.sh
@@ -89,6 +114,7 @@ jobs:
               --command=./.codeql-build.sh \
               --overwrite 2>&1 | tail -30
           else
+            # Default: autobuild (interpreted langs + x86_64 compiled)
             codeql database create codeql-db \
               --language="${{ matrix.language.name }}" \
               --source-root=. \
@@ -133,12 +159,20 @@ jobs:
         if: always()
         shell: bash
         run: |
-          cat > timing.json << 'ENDJSON'
+          ARCH=$(uname -m)
+          ARM64_MODE="${{ matrix.language.arm64-build-mode }}"
+          if [ "$ARCH" = "aarch64" ] && [ -n "$ARM64_MODE" ]; then
+            BUILD_MODE="$ARM64_MODE"
+          else
+            BUILD_MODE="autobuild"
+          fi
+          cat > timing.json << ENDJSON
           {
             "language": "${{ matrix.language.name }}",
             "arch": "${{ matrix.arch.name }}",
             "project": "${{ matrix.language.project }}",
             "ref": "${{ matrix.language.ref }}",
+            "build_mode": "$BUILD_MODE",
             "create_ms": ${{ steps.create-db.outputs.duration_ms || -1 }},
             "analyze_ms": ${{ steps.analyze.outputs.duration_ms || -1 }},
             "result_count": ${{ steps.analyze.outputs.result_count || -1 }},
@@ -200,23 +234,24 @@ jobs:
                       })
               return sorted(results, key=lambda x: json.dumps(x, sort_keys=True))
 
-          # compiled: languages where ARM64 tracing is expected to fail
-          compiled_langs = {"java", "go", "cpp"}
-          languages = ["python", "javascript", "ruby", "java", "go", "cpp"]
+          # Languages that use --build-mode=none on ARM64 (buildless).
+          # Buildless may produce different results or fail entirely.
+          buildless_on_arm64 = {"java", "go", "cpp", "rust"}
+          languages = ["python", "javascript", "ruby", "java", "go", "cpp", "rust"]
           report = []
           has_real_diff = False
 
           for lang in languages:
               arm = f"sarifs/sarif-{lang}-arm64/results.sarif"
               x86 = f"sarifs/sarif-{lang}-x86_64/results.sarif"
-              is_compiled = lang in compiled_langs
+              is_buildless = lang in buildless_on_arm64
 
               if not os.path.exists(arm) and not os.path.exists(x86):
                   report.append(f"| {lang} | — | — | SKIPPED (both missing) |")
                   continue
               if not os.path.exists(arm):
-                  if is_compiled:
-                      report.append(f"| {lang} | — | x86 only | EXPECTED (compiled, no ARM64 tracer) |")
+                  if is_buildless:
+                      report.append(f"| {lang} | — | x86 only | EXPECTED (buildless failed on ARM64) |")
                   else:
                       report.append(f"| {lang} | — | — | **UNEXPECTED**: ARM64 SARIF missing |")
                       has_real_diff = True
@@ -234,6 +269,12 @@ jobs:
 
               if arm_r == x86_r:
                   report.append(f"| {lang} | {len(arm_r)} | {len(x86_r)} | MATCH |")
+              elif is_buildless:
+                  only_arm = arm_set - x86_set
+                  only_x86 = x86_set - arm_set
+                  detail = f"EXPECTED DIFF — buildless vs traced (+{len(only_arm)}/-{len(only_x86)})"
+                  report.append(f"| {lang} | {len(arm_r)} | {len(x86_r)} | {detail} |")
+                  print(f"\n{lang}: buildless ARM64 ({len(arm_r)} findings) vs traced x86_64 ({len(x86_r)} findings)")
               else:
                   only_arm = arm_set - x86_set
                   only_x86 = x86_set - arm_set
@@ -259,15 +300,16 @@ jobs:
                   f.write(line + "\n")
               f.write("\n")
               if not has_real_diff:
-                  f.write("> All interpreted language SARIFs match between ARM64 and x86_64.\n")
-                  f.write("> Compiled languages are expected to fail on ARM64 (x86_64 tracer cannot inject into ARM64 builds).\n\n")
+                  f.write("> Interpreted languages: identical SARIFs on ARM64 and x86_64.\n")
+                  f.write("> Compiled languages: ARM64 uses buildless mode (`--build-mode=none`), ")
+                  f.write("which may produce different results than traced analysis on x86_64.\n\n")
 
           if has_real_diff:
               print("\nERROR: Unexpected SARIF differences found for interpreted languages!")
               sys.exit(1)
           else:
               print("\nAll interpreted language SARIF outputs match between ARM64 and x86_64.")
-              print("Compiled language ARM64 failures are expected (x86_64 tracer limitation).")
+              print("Compiled language differences are expected (buildless vs traced).")
           PYEOF
 
   # ───────────────────────────────────────────────────────────────────
@@ -339,14 +381,17 @@ jobs:
           with open(summary, "a") as f:
               f.write("## CodeQL ARM64 Compatibility Report\n\n")
               f.write("### Performance Comparison (ARM64 vs x86_64)\n\n")
-              f.write("| Language | Project | Metric | ARM64 | x86_64 | Delta |\n")
-              f.write("|----------|---------|--------|------:|-------:|------:|\n")
+              f.write("| Language | Project | Mode | Metric | ARM64 | x86_64 | Delta |\n")
+              f.write("|----------|---------|------|--------|------:|-------:|------:|\n")
 
               for lang in sorted(languages.keys()):
                   archs = languages[lang]
                   arm = archs.get("arm64", {})
                   x86 = archs.get("x86_64", {})
                   project = arm.get("project") or x86.get("project", "?")
+                  arm_mode = arm.get("build_mode", "autobuild")
+                  x86_mode = x86.get("build_mode", "autobuild")
+                  mode_col = f"{arm_mode} / {x86_mode}" if arm_mode != x86_mode else arm_mode
 
                   # DB create
                   arm_c = arm.get("create_ms", -1)
@@ -357,7 +402,7 @@ jobs:
                       delta_c = "—"
                   arm_c_s = f"{arm_c/1000:.1f}s" if arm_c > 0 else "FAIL"
                   x86_c_s = f"{x86_c/1000:.1f}s" if x86_c > 0 else "FAIL"
-                  f.write(f"| {lang} | {project} | DB create | {arm_c_s} | {x86_c_s} | {delta_c} |\n")
+                  f.write(f"| {lang} | {project} | {mode_col} | DB create | {arm_c_s} | {x86_c_s} | {delta_c} |\n")
 
                   # Analysis
                   arm_a = arm.get("analyze_ms", -1)
@@ -368,7 +413,7 @@ jobs:
                       delta_a = "—"
                   arm_a_s = f"{arm_a/1000:.1f}s" if arm_a > 0 else "FAIL"
                   x86_a_s = f"{x86_a/1000:.1f}s" if x86_a > 0 else "FAIL"
-                  f.write(f"| | | Analysis | {arm_a_s} | {x86_a_s} | {delta_a} |\n")
+                  f.write(f"| | | | Analysis | {arm_a_s} | {x86_a_s} | {delta_a} |\n")
 
                   # Findings
                   arm_n = arm.get("result_count", -1)
@@ -376,11 +421,10 @@ jobs:
                   arm_n_s = str(arm_n) if arm_n >= 0 else "—"
                   x86_n_s = str(x86_n) if x86_n >= 0 else "—"
                   match = "MATCH" if arm_n == x86_n and arm_n >= 0 else ("—" if arm_n < 0 or x86_n < 0 else "DIFF")
-                  f.write(f"| | | Findings | {arm_n_s} | {x86_n_s} | {match} |\n")
+                  f.write(f"| | | | Findings | {arm_n_s} | {x86_n_s} | {match} |\n")
 
               f.write("\n### Summary\n\n")
 
-              # Count successes/failures
               arm_data = [d for d in data if d["arch"] == "arm64"]
               x86_data = [d for d in data if d["arch"] == "x86_64"]
               arm_ok = sum(1 for d in arm_data if d.get("create_ms", -1) > 0)
@@ -388,17 +432,32 @@ jobs:
               f.write(f"- **ARM64**: {arm_ok}/{len(arm_data)} languages succeeded\n")
               f.write(f"- **x86_64**: {x86_ok}/{len(x86_data)} languages succeeded\n")
 
-              langs_arm = sorted(d["language"] for d in arm_data if d.get("create_ms", -1) > 0)
-              langs_x86 = sorted(d["language"] for d in x86_data if d.get("create_ms", -1) > 0)
-              f.write(f"- **ARM64 languages**: {', '.join(langs_arm) or 'none'}\n")
-              f.write(f"- **x86_64 languages**: {', '.join(langs_x86) or 'none'}\n")
+              # Categorise by build mode
+              arm_buildless = [d for d in arm_data if d.get("build_mode") == "none"]
+              arm_auto = [d for d in arm_data if d.get("build_mode") != "none"]
+              bl_ok = sum(1 for d in arm_buildless if d.get("create_ms", -1) > 0)
+              auto_ok = sum(1 for d in arm_auto if d.get("create_ms", -1) > 0)
+              if arm_buildless:
+                  bl_langs = sorted(d["language"] for d in arm_buildless if d.get("create_ms", -1) > 0)
+                  bl_fail = sorted(d["language"] for d in arm_buildless if d.get("create_ms", -1) <= 0)
+                  f.write(f"- **ARM64 buildless** (`--build-mode=none`): {bl_ok}/{len(arm_buildless)}")
+                  if bl_langs: f.write(f" — passed: {', '.join(bl_langs)}")
+                  if bl_fail: f.write(f" — failed: {', '.join(bl_fail)}")
+                  f.write("\n")
+              if arm_auto:
+                  auto_langs = sorted(d["language"] for d in arm_auto if d.get("create_ms", -1) > 0)
+                  f.write(f"- **ARM64 autobuild**: {auto_ok}/{len(arm_auto)} — {', '.join(auto_langs) or 'none'}\n")
+
               f.write(f"- **Architectures**: ARM64 (ubuntu-24.04-arm), x86_64 (ubuntu-latest)\n")
               f.write(f"- **CodeQL version**: downloaded at runtime (latest or pinned)\n\n")
 
               f.write("### Known Limitations\n\n")
-              f.write("Compiled languages (Java, Go, C++) fail on ARM64 because the CodeQL\n")
-              f.write("preload_tracer (x86_64 binary) cannot inject into ARM64 build processes.\n")
-              f.write("Interpreted languages (Python, JavaScript, Ruby) work fully on both architectures.\n")
+              f.write("| Limitation | Affected languages | Workaround |\n")
+              f.write("|------------|-------------------|------------|\n")
+              f.write("| Build tracing (`preload_tracer`) not supported on ARM64 | C/C++, Java, Go, Rust | Use `--build-mode=none` (buildless) |\n")
+              f.write("| Go does not support `--build-mode=none` | Go | Must use x86_64 runner |\n")
+              f.write("| Buildless analysis has reduced depth | Java, C/C++, Rust | Some data-flow findings may be missed |\n")
+              f.write("| Rust support is experimental in CodeQL | Rust | May fail on some projects |\n")
 
           print("Performance report written to GITHUB_STEP_SUMMARY")
           PYEOF
