@@ -428,7 +428,7 @@ jobs:
           codeql --version
 
   # ───────────────────────────────────────────────────────────────────
-  # Stub tracer validation — confirms ARM64 stub replaces x86_64 binary
+  # Stub tracer validation — traced build on ARM64 must fail gracefully
   # ───────────────────────────────────────────────────────────────────
   stub-tracer:
     name: Stub tracer (ARM64)
@@ -436,63 +436,59 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v6
+      - name: Checkout a C project for traced build
+        uses: actions/checkout@v6
+        with:
+          repository: DaveGamble/cJSON
+          ref: "v1.7.18"
 
-      - name: Run action
+      - name: Setup CodeQL (ARM64 compat)
         id: setup
         uses: caseware/codeql-arm64-compat@v1
+        with:
+          enable-compiled-languages: "true"
 
-      - name: Verify stub tracer replacement
+      - name: Attempt traced build (must fail with stub message, not SIGSEGV)
         shell: bash
-        env:
-          CODEQL_PATH: ${{ steps.setup.outputs.codeql-path }}
         run: |
-          TRACER="$CODEQL_PATH/tools/linux64/preload_tracer"
-
           echo "## Stub Tracer Validation" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
 
-          # 1. Tracer must exist
-          if [ ! -f "$TRACER" ]; then
-            echo "::error::preload_tracer not found at $TRACER"
-            exit 1
-          fi
-
-          # 2. Must be an ARM64 ELF (not x86_64)
-          FILE_INFO=$(file "$TRACER")
-          echo "| Check | Result |" >> "$GITHUB_STEP_SUMMARY"
-          echo "|-------|--------|" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Binary | $FILE_INFO |" >> "$GITHUB_STEP_SUMMARY"
-
-          if echo "$FILE_INFO" | grep -qi "aarch64\|ARM aarch64"; then
-            echo "| Architecture | ARM64 ✓ |" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "::error::preload_tracer is NOT ARM64: $FILE_INFO"
-            echo "| Architecture | NOT ARM64 ✗ |" >> "$GITHUB_STEP_SUMMARY"
-            exit 1
-          fi
-
-          # 3. Must exit non-zero with diagnostic message
+          # Run codeql database create in traced mode (no --build-mode=none).
+          # The stub tracer should cause this to fail with exit 1 and a
+          # diagnostic message, NOT a SIGSEGV (exit 139).
           set +e
-          OUTPUT=$("$TRACER" 2>&1)
+          OUTPUT=$(codeql database create codeql-db \
+            --language=cpp \
+            --source-root=. \
+            --command="mkdir -p build && cd build && cmake .. && make" \
+            --overwrite 2>&1)
           EXIT_CODE=$?
           set -e
 
+          echo "| Check | Result |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-------|--------|" >> "$GITHUB_STEP_SUMMARY"
           echo "| Exit code | $EXIT_CODE |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Output | $(echo "$OUTPUT" | head -1) |" >> "$GITHUB_STEP_SUMMARY"
 
-          if [ "$EXIT_CODE" -ne 1 ]; then
-            echo "::error::Stub should exit 1 but exited $EXIT_CODE"
+          # Must NOT be SIGSEGV (139) — that means stub wasn't replaced
+          if [ "$EXIT_CODE" -eq 139 ]; then
+            echo "| SIGSEGV | FAIL — stub was not replaced |" >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::preload_tracer crashed with SIGSEGV (139). Stub replacement failed."
             exit 1
           fi
 
-          if ! echo "$OUTPUT" | grep -qi "not supported\|tracing.*not"; then
-            echo "::error::Stub output missing diagnostic message: $OUTPUT"
+          # Must contain the stub's diagnostic message
+          if echo "$OUTPUT" | grep -q "build tracing is NOT supported on ARM64"; then
+            echo "| Stub message | Found |" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "| Stub message | NOT found |" >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::Stub diagnostic message not found in output"
+            echo "$OUTPUT" | tail -20
             exit 1
           fi
 
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "All stub tracer checks passed." >> "$GITHUB_STEP_SUMMARY"
+          echo "Traced build failed gracefully via stub tracer (not SIGSEGV)." >> "$GITHUB_STEP_SUMMARY"
 
   # ───────────────────────────────────────────────────────────────────
   # Performance report — aggregates timing across all scan jobs
