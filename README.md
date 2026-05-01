@@ -78,7 +78,8 @@ jobs:
             --format=sarif-latest --output=results.sarif --download
 ```
 
-Supported for Java/Kotlin, C/C++, Go, C#, Swift, and Rust (experimental).
+Supported for Java/Kotlin, C/C++, C#, Swift, and Rust (experimental).
+Go is **not supported** on ARM64 — see [Known limitations](#known-limitations).
 
 ### With `github/codeql-action` (init/analyze pattern)
 
@@ -239,7 +240,7 @@ SARIF output is identical between ARM64 and x86_64 runners.
 | Language | ARM64 status | Build mode on ARM64 | `enable-compiled-languages` needed? | Notes |
 |----------|:---:|:---:|:---:|-------|
 | Java/Kotlin | **Buildless** | `--build-mode=none` | No | Analyses source without building |
-| Go | **Buildless** | `--build-mode=none` | No | Analyses source without building |
+| Go | **Not supported** | — | — | No `--build-mode=none`; autobuild requires `preload_tracer` |
 | C/C++ | **Buildless** | `--build-mode=none` | No | Analyses source without building |
 | Rust | **Experimental** | `--build-mode=none` | No | CodeQL Rust support is experimental |
 | C# | **Buildless** | `--build-mode=none` | No | Not yet tested |
@@ -251,7 +252,7 @@ Buildless analysis runs entirely via the Java evaluation engine — no x86_64 bi
 
 CodeQL's `preload_tracer` is an x86_64 binary that uses `LD_PRELOAD` to inject an x86_64
 shared library into build processes to intercept filesystem calls. On ARM64 runners the build
-tools (gcc, javac, go build, etc.) are native ARM64 binaries — you cannot inject an x86_64
+tools (gcc, javac, etc.) are native ARM64 binaries — you cannot inject an x86_64
 `.so` into an ARM64 process.
 
 This action replaces the `preload_tracer` with a native ARM64 stub (`src/stub-tracer.c`) that
@@ -329,10 +330,11 @@ export QEMU_LD_PREFIX=/tmp/x86_64-rootfs
 
 ## Contributing
 
-Issues and PRs welcome. Key areas for improvement:
-- [ ] Testing matrix across CodeQL versions
-- [ ] Native ARM64 CodeQL extractors when GitHub ships them
-- [ ] Pre-built stub-tracer release assets (currently compiled at action time)
+Issues and PRs welcome. The test suite validates across multiple CodeQL versions,
+6 languages, and both ARM64/x86_64 architectures. The stub `preload_tracer` is
+built natively on an ARM64 runner and published as a GitHub Release asset via the
+`release-stub-tracer.yml` workflow (triggers on changes to `src/stub-tracer.c`).
+The action downloads it at runtime with caching for resiliency.
 
 ## License
 
