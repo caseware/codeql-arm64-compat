@@ -324,20 +324,10 @@ runs:
         TRACER="$CODEQL_DIR/tools/linux64/preload_tracer"
         ACTION_DIR="${GITHUB_ACTION_PATH:-.}"
 
-        if [ -f "$TRACER" ]; then
+        if [ -f "$TRACER" ] && [ -f "$ACTION_DIR/bin/preload_tracer-arm64" ]; then
           echo "::group::Replacing preload_tracer with ARM64 stub"
-          if [ -f "$ACTION_DIR/bin/preload_tracer-arm64" ]; then
-            cp "$ACTION_DIR/bin/preload_tracer-arm64" "$TRACER"
-            chmod +x "$TRACER"
-          else
-            echo "::warning::Pre-built stub not found at $ACTION_DIR/bin/preload_tracer-arm64, compiling from source"
-            if [ -f "$ACTION_DIR/src/stub-tracer.c" ]; then
-              gcc -static -O2 -o "$TRACER" "$ACTION_DIR/src/stub-tracer.c"
-            else
-              echo "::error::Neither pre-built binary nor source found for stub tracer"
-              exit 1
-            fi
-          fi
+          cp "$ACTION_DIR/bin/preload_tracer-arm64" "$TRACER"
+          chmod +x "$TRACER"
           echo "Replaced preload_tracer with ARM64 native stub ($(file "$TRACER" | cut -d: -f2))"
           echo "::endgroup::"
         fi
