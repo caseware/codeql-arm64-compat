@@ -454,9 +454,8 @@ jobs:
               f.write("### Known Limitations\n\n")
               f.write("| Limitation | Affected languages | Workaround |\n")
               f.write("|------------|-------------------|------------|\n")
-              f.write("| Build tracing (`preload_tracer`) not supported on ARM64 | C/C++, Java, Go, Rust | Use `--build-mode=none` (buildless) |\n")
-              f.write("| Go does not support `--build-mode=none` | Go | Must use x86_64 runner |\n")
-              f.write("| Buildless analysis has reduced depth | Java, C/C++, Rust | Some data-flow findings may be missed |\n")
+              f.write("| Build tracing (`preload_tracer`) not supported on ARM64 | All compiled | Use `--build-mode=none` (buildless) |\n")
+              f.write("| Buildless analysis has reduced depth | All compiled | Some data-flow findings may be missed |\n")
               f.write("| Rust support is experimental in CodeQL | Rust | May fail on some projects |\n")
 
           print("Performance report written to GITHUB_STEP_SUMMARY")
