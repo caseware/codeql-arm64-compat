@@ -7,6 +7,8 @@ on:
     branches: [v1]
   workflow_dispatch:
 
+permissions: {}
+
 jobs:
   # ───────────────────────────────────────────────────────────────────
   # Compatibility matrix — real-world projects, ARM64 vs x86_64
@@ -14,6 +16,8 @@ jobs:
   scan:
     name: "${{ matrix.language.name }} — ${{ matrix.arch.name }}"
     runs-on: ${{ matrix.arch.runner }}
+    permissions:
+      contents: read
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -45,12 +49,8 @@ jobs:
             compiled: true
             build-cmd: ""
             arm64-build-mode: "none"
-          - name: go
-            project: gorilla/mux
-            ref: "v1.8.1"
-            compiled: true
-            build-cmd: ""
-            arm64-build-mode: "none"
+          # Go excluded: autobuild wraps with preload_tracer (no ARM64 support),
+          # and Go doesn't support --build-mode=none. See README for details.
           - name: cpp
             project: DaveGamble/cJSON
             ref: "v1.7.18"
@@ -58,8 +58,8 @@ jobs:
             build-cmd: "mkdir build && cd build && cmake .. && make"
             arm64-build-mode: "none"
           - name: rust
-            project: nickel-org/nickel.rs
-            ref: "0.11.0"
+            project: BurntSushi/ripgrep
+            ref: "14.1.1"
             compiled: true
             build-cmd: ""
             arm64-build-mode: "none"
@@ -68,13 +68,12 @@ jobs:
             runner: ubuntu-24.04-arm
           - name: x86_64
             runner: ubuntu-latest
-
-    # Buildless mode on ARM64 may not be supported for all languages (e.g. Go).
+    # Buildless mode on ARM64 may produce different findings than traced x86_64.
     # Interpreted languages and x86_64 jobs must always pass.
     continue-on-error: ${{ matrix.arch.name == 'arm64' && matrix.language.arm64-build-mode == 'none' }}
     steps:
       - name: Checkout test project
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: ${{ matrix.language.project }}
           ref: ${{ matrix.language.ref }}
@@ -88,18 +87,20 @@ jobs:
       - name: Create CodeQL database
         id: create-db
         shell: bash
+        env:
+          ARM64_MODE: ${{ matrix.language.arm64-build-mode }}
+          BUILD_CMD: ${{ matrix.language.build-cmd }}
+          LANG_NAME: ${{ matrix.language.name }}
         run: |
           START_NS=$(date +%s%N)
 
           ARCH=$(uname -m)
-          ARM64_MODE="${{ matrix.language.arm64-build-mode }}"
-          BUILD_CMD="${{ matrix.language.build-cmd }}"
 
           if [ "$ARCH" = "aarch64" ] && [ -n "$ARM64_MODE" ]; then
             # ARM64 buildless mode — analyse source without a build step
             echo "Using --build-mode=$ARM64_MODE on ARM64"
             codeql database create codeql-db \
-              --language="${{ matrix.language.name }}" \
+              --language="$LANG_NAME" \
               --source-root=. \
               --build-mode="$ARM64_MODE" \
               --overwrite 2>&1 | tail -30
@@ -109,14 +110,14 @@ jobs:
             echo "$BUILD_CMD" >> .codeql-build.sh
             chmod +x .codeql-build.sh
             codeql database create codeql-db \
-              --language="${{ matrix.language.name }}" \
+              --language="$LANG_NAME" \
               --source-root=. \
               --command=./.codeql-build.sh \
               --overwrite 2>&1 | tail -30
           else
             # Default: autobuild (interpreted langs + x86_64 compiled)
             codeql database create codeql-db \
-              --language="${{ matrix.language.name }}" \
+              --language="$LANG_NAME" \
               --source-root=. \
               --overwrite 2>&1 | tail -30
           fi
@@ -127,11 +128,13 @@ jobs:
       - name: Run CodeQL analysis
         id: analyze
         shell: bash
+        env:
+          LANG_NAME: ${{ matrix.language.name }}
         run: |
           START_NS=$(date +%s%N)
 
           codeql database analyze codeql-db \
-            "codeql/${{ matrix.language.name }}-queries" \
+            "codeql/${LANG_NAME}-queries" \
             --format=sarif-latest \
             --output=results.sarif \
             --download 2>&1 | tail -20
@@ -148,7 +151,7 @@ jobs:
 
       - name: Upload SARIF
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sarif-${{ matrix.language.name }}-${{ matrix.arch.name }}
           path: results.sarif
@@ -158,9 +161,18 @@ jobs:
       - name: Save timing data
         if: always()
         shell: bash
+        env:
+          ARM64_MODE: ${{ matrix.language.arm64-build-mode }}
+          LANG_NAME: ${{ matrix.language.name }}
+          ARCH_NAME: ${{ matrix.arch.name }}
+          PROJECT_NAME: ${{ matrix.language.project }}
+          REF_NAME: ${{ matrix.language.ref }}
+          CREATE_MS: ${{ steps.create-db.outputs.duration_ms || -1 }}
+          ANALYZE_MS: ${{ steps.analyze.outputs.duration_ms || -1 }}
+          RESULT_COUNT: ${{ steps.analyze.outputs.result_count || -1 }}
+          JOB_STATUS: ${{ job.status }}
         run: |
           ARCH=$(uname -m)
-          ARM64_MODE="${{ matrix.language.arm64-build-mode }}"
           if [ "$ARCH" = "aarch64" ] && [ -n "$ARM64_MODE" ]; then
             BUILD_MODE="$ARM64_MODE"
           else
@@ -168,21 +180,21 @@ jobs:
           fi
           cat > timing.json << ENDJSON
           {
-            "language": "${{ matrix.language.name }}",
-            "arch": "${{ matrix.arch.name }}",
-            "project": "${{ matrix.language.project }}",
-            "ref": "${{ matrix.language.ref }}",
+            "language": "$LANG_NAME",
+            "arch": "$ARCH_NAME",
+            "project": "$PROJECT_NAME",
+            "ref": "$REF_NAME",
             "build_mode": "$BUILD_MODE",
-            "create_ms": ${{ steps.create-db.outputs.duration_ms || -1 }},
-            "analyze_ms": ${{ steps.analyze.outputs.duration_ms || -1 }},
-            "result_count": ${{ steps.analyze.outputs.result_count || -1 }},
-            "status": "${{ job.status }}"
+            "create_ms": $CREATE_MS,
+            "analyze_ms": $ANALYZE_MS,
+            "result_count": $RESULT_COUNT,
+            "status": "$JOB_STATUS"
           }
           ENDJSON
 
       - name: Upload timing data
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: timing-${{ matrix.language.name }}-${{ matrix.arch.name }}
           path: timing.json
@@ -196,9 +208,11 @@ jobs:
     needs: scan
     if: always()
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
     steps:
       - name: Download all SARIF artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: sarif-*
           path: sarifs
@@ -236,8 +250,8 @@ jobs:
 
           # Languages that use --build-mode=none on ARM64 (buildless).
           # Buildless may produce different results or fail entirely.
-          buildless_on_arm64 = {"java", "go", "cpp", "rust"}
-          languages = ["python", "javascript", "ruby", "java", "go", "cpp", "rust"]
+          buildless_on_arm64 = {"java", "cpp", "rust"}
+          languages = ["python", "javascript", "ruby", "java", "cpp", "rust"]
           report = []
           has_real_diff = False
 
@@ -313,13 +327,83 @@ jobs:
           PYEOF
 
   # ───────────────────────────────────────────────────────────────────
+  # CodeQL version matrix — validates across multiple releases
+  # ───────────────────────────────────────────────────────────────────
+  version-matrix:
+    name: "CodeQL ${{ matrix.codeql-version }} (ARM64)"
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - codeql-version: "latest"
+            query-pack: "codeql/python-queries"
+          - codeql-version: "v2.25.2"
+            query-pack: "codeql/python-queries"
+          - codeql-version: "v2.20.0"
+            query-pack: "codeql/python-queries@~1.2.0"
+    steps:
+      - name: Checkout test project
+        uses: actions/checkout@v6
+        with:
+          repository: pallets/flask
+          ref: "3.1.1"
+
+      - name: Checkout action
+        uses: actions/checkout@v6
+        with:
+          path: .codeql-arm64-action
+
+      - name: Setup CodeQL (ARM64 compat)
+        id: setup
+        uses: ./.codeql-arm64-action
+        with:
+          codeql-version: ${{ matrix.codeql-version }}
+
+      - name: Create CodeQL database
+        run: |
+          codeql database create codeql-db \
+            --language=python \
+            --source-root=. \
+            --overwrite 2>&1 | tail -20
+
+      - name: Run CodeQL analysis
+        shell: bash
+        env:
+          QUERY_PACK: ${{ matrix.query-pack }}
+        run: |
+          codeql database analyze codeql-db \
+            --format=sarif-latest \
+            --output=results.sarif \
+            --download \
+            "$QUERY_PACK" 2>&1 | tail -10
+
+      - name: Report results
+        shell: bash
+        env:
+          CODEQL_VER: ${{ matrix.codeql-version }}
+        run: |
+          FINDINGS=$(python3 -c "import json; d=json.load(open('results.sarif')); print(sum(len(r.get('results',[])) for r in d.get('runs',[])))")
+          echo "## CodeQL $CODEQL_VER" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Metric | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|--------|-------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Version | $(codeql --version 2>&1 | head -1) |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Architecture | $(uname -m) |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Findings | $FINDINGS |" >> "$GITHUB_STEP_SUMMARY"
+
+  # ───────────────────────────────────────────────────────────────────
   # Cache validation — separate from the matrix
   # ───────────────────────────────────────────────────────────────────
   cache-validation:
     name: Cache validation (ARM64)
     runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Run action (populates or restores cache)
         id: setup
@@ -329,28 +413,96 @@ jobs:
 
       - name: Report cache status
         shell: bash
+        env:
+          SETUP_VERSION: ${{ steps.setup.outputs.codeql-version }}
+          SETUP_PATH: ${{ steps.setup.outputs.codeql-path }}
         run: |
           echo "## Cache Validation" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "| Component | Status |" >> "$GITHUB_STEP_SUMMARY"
           echo "|-----------|--------|" >> "$GITHUB_STEP_SUMMARY"
-          echo "| CodeQL CLI | ${{ steps.setup.outputs.codeql-version }} |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| CodeQL path | ${{ steps.setup.outputs.codeql-path }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| CodeQL CLI | $SETUP_VERSION |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| CodeQL path | $SETUP_PATH |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Architecture | $(uname -m) |" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           codeql --version
+
+  # ───────────────────────────────────────────────────────────────────
+  # Stub tracer validation — traced build on ARM64 must fail gracefully
+  # ───────────────────────────────────────────────────────────────────
+  stub-tracer:
+    name: Stub tracer (ARM64)
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout a C project for traced build
+        uses: actions/checkout@v6
+        with:
+          repository: DaveGamble/cJSON
+          ref: "v1.7.18"
+
+      - name: Setup CodeQL (ARM64 compat)
+        id: setup
+        uses: caseware/codeql-arm64-compat@v1
+        with:
+          enable-compiled-languages: "true"
+
+      - name: Attempt traced build (must fail with stub message, not SIGSEGV)
+        shell: bash
+        run: |
+          echo "## Stub Tracer Validation" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          # Run codeql database create in traced mode (no --build-mode=none).
+          # The stub tracer should cause this to fail with exit 1 and a
+          # diagnostic message, NOT a SIGSEGV (exit 139).
+          set +e
+          OUTPUT=$(codeql database create codeql-db \
+            --language=cpp \
+            --source-root=. \
+            --command="mkdir -p build && cd build && cmake .. && make" \
+            --overwrite 2>&1)
+          EXIT_CODE=$?
+          set -e
+
+          echo "| Check | Result |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-------|--------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Exit code | $EXIT_CODE |" >> "$GITHUB_STEP_SUMMARY"
+
+          # Must NOT be SIGSEGV (139) — that means stub wasn't replaced
+          if [ "$EXIT_CODE" -eq 139 ]; then
+            echo "| SIGSEGV | FAIL — stub was not replaced |" >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::preload_tracer crashed with SIGSEGV (139). Stub replacement failed."
+            exit 1
+          fi
+
+          # Must contain the stub's diagnostic message
+          if echo "$OUTPUT" | grep -q "build tracing is NOT supported on ARM64"; then
+            echo "| Stub message | Found |" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "| Stub message | NOT found |" >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::Stub diagnostic message not found in output"
+            echo "$OUTPUT" | tail -20
+            exit 1
+          fi
+
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Traced build failed gracefully via stub tracer (not SIGSEGV)." >> "$GITHUB_STEP_SUMMARY"
 
   # ───────────────────────────────────────────────────────────────────
   # Performance report — aggregates timing across all scan jobs
   # ───────────────────────────────────────────────────────────────────
   report:
     name: Performance report
-    needs: [scan, sarif-check, cache-validation]
+    needs: [scan, sarif-check, cache-validation, version-matrix, stub-tracer]
     if: always()
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
     steps:
       - name: Download timing data
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: timing-*
           path: timings
@@ -455,8 +607,56 @@ jobs:
               f.write("| Limitation | Affected languages | Workaround |\n")
               f.write("|------------|-------------------|------------|\n")
               f.write("| Build tracing (`preload_tracer`) not supported on ARM64 | All compiled | Use `--build-mode=none` (buildless) |\n")
+              f.write("| Go unsupported on ARM64 | Go | No `--build-mode=none`; autobuild requires preload_tracer |\n")
               f.write("| Buildless analysis has reduced depth | All compiled | Some data-flow findings may be missed |\n")
               f.write("| Rust support is experimental in CodeQL | Rust | May fail on some projects |\n")
 
           print("Performance report written to GITHUB_STEP_SUMMARY")
           PYEOF
+
+      - name: Gate check
+        if: always()
+        shell: bash
+        env:
+          SCAN: ${{ needs.scan.result }}
+          SARIF: ${{ needs.sarif-check.result }}
+          CACHE: ${{ needs.cache-validation.result }}
+          VERSIONS: ${{ needs.version-matrix.result }}
+          STUB: ${{ needs.stub-tracer.result }}
+        run: |
+          echo "Checking upstream job results..."
+
+          echo "  scan:             $SCAN"
+          echo "  sarif-check:      $SARIF"
+          echo "  cache-validation: $CACHE"
+          echo "  version-matrix:   $VERSIONS"
+          echo "  stub-tracer:      $STUB"
+
+          FAILED=0
+          # scan uses continue-on-error for buildless jobs, so 'failure' is acceptable
+          if [[ "$SARIF" == "failure" ]]; then
+            echo "::error::SARIF consistency check failed"
+            FAILED=1
+          fi
+          if [[ "$CACHE" == "failure" ]]; then
+            echo "::error::Cache validation failed"
+            FAILED=1
+          fi
+          if [[ "$VERSIONS" == "failure" ]]; then
+            echo "::error::CodeQL version matrix failed"
+            FAILED=1
+          fi
+          if [[ "$STUB" == "failure" ]]; then
+            echo "::error::Stub tracer validation failed"
+            FAILED=1
+          fi
+          if [[ "$SCAN" == "failure" ]]; then
+            echo "::warning::Some scan jobs failed (may include expected buildless failures)"
+          fi
+
+          if [[ "$FAILED" -eq 1 ]]; then
+            echo ""
+            echo "::error::Gate check FAILED — see errors above"
+            exit 1
+          fi
+          echo "Gate check passed"
