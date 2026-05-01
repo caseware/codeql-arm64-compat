@@ -30,7 +30,8 @@ int main(int argc, char *argv[]) {
         "\n"
         " Workaround: use --build-mode=none (buildless analysis).\n"
         " Buildless mode analyses source code without a build step and\n"
-        " is supported for C/C++, Java/Kotlin, C#, Swift, and Go.\n"
+        " is supported for C/C++, Java/Kotlin, C#, and Swift.\n"
+        " Go is NOT supported (no --build-mode=none; autobuild needs this tracer).\n"
         "\n"
         "================================================================\n"
         "\n");

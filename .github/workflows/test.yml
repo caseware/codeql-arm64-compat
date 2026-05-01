@@ -45,12 +45,8 @@ jobs:
             compiled: true
             build-cmd: ""
             arm64-build-mode: "none"
-          - name: go
-            project: gorilla/mux
-            ref: "v1.8.1"
-            compiled: false
-            build-cmd: ""
-            arm64-build-mode: ""
+          # Go excluded: autobuild wraps with preload_tracer (no ARM64 support),
+          # and Go doesn't support --build-mode=none. See README for details.
           - name: cpp
             project: DaveGamble/cJSON
             ref: "v1.7.18"
@@ -68,7 +64,6 @@ jobs:
             runner: ubuntu-24.04-arm
           - name: x86_64
             runner: ubuntu-latest
-
     # Buildless mode on ARM64 may produce different findings than traced x86_64.
     # Interpreted languages and x86_64 jobs must always pass.
     continue-on-error: ${{ matrix.arch.name == 'arm64' && matrix.language.arm64-build-mode == 'none' }}
@@ -237,7 +232,7 @@ jobs:
           # Languages that use --build-mode=none on ARM64 (buildless).
           # Buildless may produce different results or fail entirely.
           buildless_on_arm64 = {"java", "cpp", "rust"}
-          languages = ["python", "javascript", "ruby", "java", "go", "cpp", "rust"]
+          languages = ["python", "javascript", "ruby", "java", "cpp", "rust"]
           report = []
           has_real_diff = False
 
@@ -513,8 +508,49 @@ jobs:
               f.write("| Limitation | Affected languages | Workaround |\n")
               f.write("|------------|-------------------|------------|\n")
               f.write("| Build tracing (`preload_tracer`) not supported on ARM64 | All compiled | Use `--build-mode=none` (buildless) |\n")
+              f.write("| Go unsupported on ARM64 | Go | No `--build-mode=none`; autobuild requires preload_tracer |\n")
               f.write("| Buildless analysis has reduced depth | All compiled | Some data-flow findings may be missed |\n")
               f.write("| Rust support is experimental in CodeQL | Rust | May fail on some projects |\n")
 
           print("Performance report written to GITHUB_STEP_SUMMARY")
           PYEOF
+
+      - name: Gate check
+        if: always()
+        shell: bash
+        run: |
+          echo "Checking upstream job results..."
+          SCAN="${{ needs.scan.result }}"
+          SARIF="${{ needs.sarif-check.result }}"
+          CACHE="${{ needs.cache-validation.result }}"
+          VERSIONS="${{ needs.version-matrix.result }}"
+
+          echo "  scan:             $SCAN"
+          echo "  sarif-check:      $SARIF"
+          echo "  cache-validation: $CACHE"
+          echo "  version-matrix:   $VERSIONS"
+
+          FAILED=0
+          # scan uses continue-on-error for buildless jobs, so 'failure' is acceptable
+          if [[ "$SARIF" == "failure" ]]; then
+            echo "::error::SARIF consistency check failed"
+            FAILED=1
+          fi
+          if [[ "$CACHE" == "failure" ]]; then
+            echo "::error::Cache validation failed"
+            FAILED=1
+          fi
+          if [[ "$VERSIONS" == "failure" ]]; then
+            echo "::error::CodeQL version matrix failed"
+            FAILED=1
+          fi
+          if [[ "$SCAN" == "failure" ]]; then
+            echo "::warning::Some scan jobs failed (may include expected buildless failures)"
+          fi
+
+          if [[ "$FAILED" -eq 1 ]]; then
+            echo ""
+            echo "::error::Gate check FAILED — see errors above"
+            exit 1
+          fi
+          echo "Gate check passed"
