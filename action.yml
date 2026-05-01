@@ -388,6 +388,8 @@ runs:
           chmod +x "$TRACER"
           echo "Replaced preload_tracer with ARM64 native stub ($(file "$TRACER" | cut -d: -f2))"
           echo "::endgroup::"
+        elif [ -f "$TRACER" ]; then
+          echo "::warning::Pre-built ARM64 stub tracer not available — preload_tracer was NOT replaced. Traced builds on ARM64 will fail with SIGSEGV. Use --build-mode=none (buildless analysis) instead."
         fi
 
     - name: Finalize setup
