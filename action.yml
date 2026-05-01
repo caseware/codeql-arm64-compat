@@ -22,10 +22,10 @@ inputs:
   enable-compiled-languages:
     description: |
       Set to 'true' if you need to scan C/C++ or other compiled languages.
-      This downloads an official Ubuntu 22.04 amd64 base tarball (~30 MB) and
+      Downloads only the x86_64 dynamic linker and glibc (~3 MB, cached) and
       sets QEMU_LD_PREFIX so that dynamically-linked x86_64 tracer binaries
-      (preload_tracer, runner) can resolve glibc and run under QEMU. Not needed
-      for interpreted languages (Python, JS, Ruby, Go, Java, C#) whose
+      (preload_tracer, runner) can resolve their dependencies under QEMU. Not
+      needed for interpreted languages (Python, JS, Ruby, Go, Java, C#) whose
       extractors are Java-based.
     required: false
     default: 'false'
@@ -61,29 +61,35 @@ runs:
       with:
         platforms: linux/amd64
 
-    - name: Restore cached x86_64 rootfs
+    - name: Restore cached x86_64 libs
       id: rootfs-cache
       if: steps.arch.outputs.is_arm64 == 'true' && inputs.enable-compiled-languages == 'true'
       uses: actions/cache@v4
       with:
         path: ${{ runner.temp }}/x86_64-rootfs
-        key: x86_64-rootfs-ubuntu-22.04-base-amd64
+        key: x86_64-libs-ubuntu-22.04-glibc-v1
 
-    - name: Download x86_64 rootfs for compiled language support
+    - name: Download x86_64 libs for compiled language support
       id: rootfs
       if: steps.arch.outputs.is_arm64 == 'true' && inputs.enable-compiled-languages == 'true' && steps.rootfs-cache.outputs.cache-hit != 'true'
       shell: bash
       run: |
-        echo "::group::Downloading x86_64 rootfs for QEMU_LD_PREFIX"
+        echo "::group::Downloading x86_64 libs for QEMU_LD_PREFIX"
         ROOTFS_DIR="${RUNNER_TEMP:-/tmp}/x86_64-rootfs"
         mkdir -p "$ROOTFS_DIR"
 
-        # Download official Ubuntu 22.04 amd64 base tarball (~30 MB)
+        # Extract only the dynamic linker + glibc libs that CodeQL's x86_64
+        # binaries need (3 MB vs 81 MB full rootfs / 30 MB compressed tarball)
         ROOTFS_URL="https://cdimage.ubuntu.com/ubuntu-base/releases/22.04/release/ubuntu-base-22.04-base-amd64.tar.gz"
-        curl -sL "$ROOTFS_URL" | tar xz -C "$ROOTFS_DIR"
+        curl -sL "$ROOTFS_URL" | tar xz -C "$ROOTFS_DIR" \
+          lib lib64 usr/lib64 \
+          usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 \
+          usr/lib/x86_64-linux-gnu/libc.so.6 \
+          usr/lib/x86_64-linux-gnu/libm.so.6 \
+          usr/lib/x86_64-linux-gnu/libdl.so.2 \
+          usr/lib/x86_64-linux-gnu/libpthread.so.0
 
-        echo "x86_64 rootfs extracted to $ROOTFS_DIR"
-        ls -la "$ROOTFS_DIR/lib64/" 2>/dev/null || ls -la "$ROOTFS_DIR/lib/" 2>/dev/null | head -5 || true
+        echo "x86_64 libs extracted to $ROOTFS_DIR ($(du -sh "$ROOTFS_DIR" | cut -f1))"
         echo "::endgroup::"
 
     - name: Set QEMU_LD_PREFIX
