@@ -369,7 +369,7 @@ runs:
         DOWNLOAD_DIR: ${{ runner.temp }}
       run: |
         echo "Downloading stub binary from release $TAG..."
-        gh release download "$TAG" --repo "$REPO" --pattern "preload_tracer-arm64" --dir "$DOWNLOAD_DIR"
+        gh release download "$TAG" --repo "$REPO" --pattern "preload_tracer-arm64" --dir "$DOWNLOAD_DIR" --clobber
         chmod +x "$DOWNLOAD_DIR/preload_tracer-arm64"
         echo "Downloaded stub from release $TAG"
 
