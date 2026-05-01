@@ -622,6 +622,7 @@ jobs:
           SARIF: ${{ needs.sarif-check.result }}
           CACHE: ${{ needs.cache-validation.result }}
           VERSIONS: ${{ needs.version-matrix.result }}
+          STUB: ${{ needs.stub-tracer.result }}
         run: |
           echo "Checking upstream job results..."
 
@@ -629,6 +630,7 @@ jobs:
           echo "  sarif-check:      $SARIF"
           echo "  cache-validation: $CACHE"
           echo "  version-matrix:   $VERSIONS"
+          echo "  stub-tracer:      $STUB"
 
           FAILED=0
           # scan uses continue-on-error for buildless jobs, so 'failure' is acceptable
@@ -642,6 +644,10 @@ jobs:
           fi
           if [[ "$VERSIONS" == "failure" ]]; then
             echo "::error::CodeQL version matrix failed"
+            FAILED=1
+          fi
+          if [[ "$STUB" == "failure" ]]; then
+            echo "::error::Stub tracer validation failed"
             FAILED=1
           fi
           if [[ "$SCAN" == "failure" ]]; then
