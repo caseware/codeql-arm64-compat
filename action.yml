@@ -61,9 +61,17 @@ runs:
       with:
         platforms: linux/amd64
 
+    - name: Restore cached x86_64 rootfs
+      id: rootfs-cache
+      if: steps.arch.outputs.is_arm64 == 'true' && inputs.enable-compiled-languages == 'true'
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.temp }}/x86_64-rootfs
+        key: x86_64-rootfs-ubuntu-22.04-base-amd64
+
     - name: Download x86_64 rootfs for compiled language support
       id: rootfs
-      if: steps.arch.outputs.is_arm64 == 'true' && inputs.enable-compiled-languages == 'true'
+      if: steps.arch.outputs.is_arm64 == 'true' && inputs.enable-compiled-languages == 'true' && steps.rootfs-cache.outputs.cache-hit != 'true'
       shell: bash
       run: |
         echo "::group::Downloading x86_64 rootfs for QEMU_LD_PREFIX"
@@ -74,7 +82,6 @@ runs:
         ROOTFS_URL="https://cdimage.ubuntu.com/ubuntu-base/releases/22.04/release/ubuntu-base-22.04-base-amd64.tar.gz"
         curl -sL "$ROOTFS_URL" | tar xz -C "$ROOTFS_DIR"
 
-        echo "rootfs-dir=$ROOTFS_DIR" >> "$GITHUB_OUTPUT"
         echo "x86_64 rootfs extracted to $ROOTFS_DIR"
         ls -la "$ROOTFS_DIR/lib64/" 2>/dev/null || ls -la "$ROOTFS_DIR/lib/" 2>/dev/null | head -5 || true
         echo "::endgroup::"
@@ -83,7 +90,8 @@ runs:
       if: steps.arch.outputs.is_arm64 == 'true' && inputs.enable-compiled-languages == 'true'
       shell: bash
       run: |
-        echo "QEMU_LD_PREFIX=${{ steps.rootfs.outputs.rootfs-dir }}" >> "$GITHUB_ENV"
+        ROOTFS_DIR="${RUNNER_TEMP:-/tmp}/x86_64-rootfs"
+        echo "QEMU_LD_PREFIX=$ROOTFS_DIR" >> "$GITHUB_ENV"
 
     - name: Determine CodeQL version
       id: version
