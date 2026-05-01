@@ -7,6 +7,8 @@ on:
     branches: [v1]
   workflow_dispatch:
 
+permissions: {}
+
 jobs:
   # ───────────────────────────────────────────────────────────────────
   # Compatibility matrix — real-world projects, ARM64 vs x86_64
@@ -14,6 +16,8 @@ jobs:
   scan:
     name: "${{ matrix.language.name }} — ${{ matrix.arch.name }}"
     runs-on: ${{ matrix.arch.runner }}
+    permissions:
+      contents: read
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -204,6 +208,8 @@ jobs:
     needs: scan
     if: always()
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
     steps:
       - name: Download all SARIF artifacts
         uses: actions/download-artifact@v4
@@ -326,6 +332,8 @@ jobs:
   version-matrix:
     name: "CodeQL ${{ matrix.codeql-version }} (ARM64)"
     runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -386,6 +394,8 @@ jobs:
   cache-validation:
     name: Cache validation (ARM64)
     runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -419,6 +429,8 @@ jobs:
     needs: [scan, sarif-check, cache-validation, version-matrix]
     if: always()
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
     steps:
       - name: Download timing data
         uses: actions/download-artifact@v4
