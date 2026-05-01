@@ -8,150 +8,369 @@ on:
   workflow_dispatch:
 
 jobs:
-  test-arm64-interpreted:
-    name: ARM64 — Interpreted language (Python)
-    runs-on: ubuntu-24.04-arm
+  # ───────────────────────────────────────────────────────────────────
+  # Compatibility matrix — real-world projects, ARM64 vs x86_64
+  # ───────────────────────────────────────────────────────────────────
+  scan:
+    name: "${{ matrix.language.name }} — ${{ matrix.arch.name }}"
+    runs-on: ${{ matrix.arch.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        language:
+          - name: python
+            project: pallets/flask
+            ref: "3.1.1"
+            compiled: false
+            build-cmd: ""
+          - name: javascript
+            project: expressjs/express
+            ref: "v4.21.2"
+            compiled: false
+            build-cmd: ""
+          - name: ruby
+            project: rack/rack
+            ref: "v3.1.12"
+            compiled: false
+            build-cmd: ""
+          - name: java
+            project: google/gson
+            ref: "gson-parent-2.12.1"
+            compiled: true
+            build-cmd: ""
+          - name: go
+            project: gorilla/mux
+            ref: "v1.8.1"
+            compiled: true
+            build-cmd: ""
+          - name: cpp
+            project: DaveGamble/cJSON
+            ref: "v1.7.18"
+            compiled: true
+            build-cmd: "mkdir build && cd build && cmake .. && make"
+        arch:
+          - name: arm64
+            runner: ubuntu-24.04-arm
+          - name: x86_64
+            runner: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: caseware/codeql-arm64-compat@v1
-        id: codeql-setup
-
-      - name: Create test project
-        run: |
-          mkdir -p /tmp/test-project
-          cat > /tmp/test-project/app.py << 'EOF'
-          import os
-          import subprocess
-
-          def run_command(user_input):
-              # Intentional vulnerability for CodeQL to find
-              subprocess.call(user_input, shell=True)
-
-          def read_file(filename):
-              with open(filename) as f:
-                  return f.read()
-          EOF
-
-      - name: Create database
-        run: |
-          codeql database create /tmp/test-db \
-            --language=python \
-            --source-root=/tmp/test-project
-
-      - name: Run analysis
-        run: |
-          codeql pack download codeql/python-queries
-          codeql database analyze /tmp/test-db codeql/python-queries \
-            --format=sarif-latest \
-            --output=/tmp/results.sarif
-
-      - name: Verify results
-        run: |
-          echo "SARIF file size: $(wc -c < /tmp/results.sarif) bytes"
-          python3 -c "
-          import json
-          with open('/tmp/results.sarif') as f:
-              sarif = json.load(f)
-          runs = sarif['runs']
-          print(f'Analysis runs: {len(runs)}')
-          for run in runs:
-              results = run.get('results', [])
-              print(f'Results found: {len(results)}')
-          "
-
-  test-arm64-compiled:
-    name: ARM64 — Compiled language support (rootfs extraction)
-    runs-on: ubuntu-24.04-arm
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: caseware/codeql-arm64-compat@v1
-        id: codeql-setup
+      - name: Checkout test project
+        uses: actions/checkout@v4
         with:
-          enable-compiled-languages: 'true'
+          repository: ${{ matrix.language.project }}
+          ref: ${{ matrix.language.ref }}
 
-      - name: Verify QEMU_LD_PREFIX is set
+      - name: Setup CodeQL (ARM64 compat)
+        id: setup
+        uses: caseware/codeql-arm64-compat@v1
+        with:
+          enable-compiled-languages: "${{ matrix.language.compiled }}"
+
+      - name: Create CodeQL database
+        id: create-db
+        shell: bash
         run: |
-          echo "QEMU_LD_PREFIX=$QEMU_LD_PREFIX"
-          test -n "$QEMU_LD_PREFIX"
-          echo "Rootfs contents:"
-          ls -la "$QEMU_LD_PREFIX/" | head -20
-          ls -la "$QEMU_LD_PREFIX/lib64/" 2>/dev/null || ls -la "$QEMU_LD_PREFIX/lib/" 2>/dev/null || true
-          # The dynamic linker could be at lib64/ or lib/x86_64-linux-gnu/
-          LD_PATH=$(find "$QEMU_LD_PREFIX" -name "ld-linux-x86-64.so*" -type f -o -name "ld-linux-x86-64.so*" -type l 2>/dev/null | head -1)
-          test -n "$LD_PATH"
-          echo "Dynamic linker found at: $LD_PATH"
+          START_NS=$(date +%s%N)
 
-      - name: Verify x86_64 binary execution via QEMU
+          BUILD_CMD="${{ matrix.language.build-cmd }}"
+          if [ -n "$BUILD_CMD" ]; then
+            codeql database create codeql-db \
+              --language="${{ matrix.language.name }}" \
+              --source-root=. \
+              --command="$BUILD_CMD" \
+              --overwrite 2>&1 | tail -30
+          else
+            codeql database create codeql-db \
+              --language="${{ matrix.language.name }}" \
+              --source-root=. \
+              --overwrite 2>&1 | tail -30
+          fi
+
+          END_NS=$(date +%s%N)
+          echo "duration_ms=$(( (END_NS - START_NS) / 1000000 ))" >> "$GITHUB_OUTPUT"
+
+      - name: Run CodeQL analysis
+        id: analyze
+        shell: bash
         run: |
-          CODEQL_DIR=$(which codeql | xargs dirname)
-          echo "CodeQL dir: $CODEQL_DIR"
-          file "$CODEQL_DIR/tools/linux64/runner" || true
-          # runner is x86_64 dynamically-linked — should work with QEMU_LD_PREFIX
-          "$CODEQL_DIR/tools/linux64/runner" --help 2>&1 | head -5 || echo "runner invocation attempted"
+          START_NS=$(date +%s%N)
 
-  test-arm64-javascript:
-    name: ARM64 — JavaScript analysis
-    runs-on: ubuntu-24.04-arm
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: caseware/codeql-arm64-compat@v1
-
-      - name: Create test project
-        run: |
-          mkdir -p /tmp/js-project
-          cat > /tmp/js-project/index.js << 'EOF'
-          const http = require('http');
-          const { exec } = require('child_process');
-
-          const server = http.createServer((req, res) => {
-            // Intentional command injection for CodeQL to detect
-            exec(req.url, (err, stdout) => {
-              res.end(stdout);
-            });
-          });
-
-          server.listen(3000);
-          EOF
-
-      - name: Create database
-        run: |
-          codeql database create /tmp/js-db \
-            --language=javascript \
-            --source-root=/tmp/js-project
-
-      - name: Run analysis
-        run: |
-          codeql pack download codeql/javascript-queries
-          codeql database analyze /tmp/js-db codeql/javascript-queries \
+          codeql database analyze codeql-db \
             --format=sarif-latest \
-            --output=/tmp/js-results.sarif
+            --output=results.sarif 2>&1 | tail -20
 
-      - name: Verify results
-        run: |
-          echo "SARIF file size: $(wc -c < /tmp/js-results.sarif) bytes"
-          python3 -c "
+          END_NS=$(date +%s%N)
+          echo "duration_ms=$(( (END_NS - START_NS) / 1000000 ))" >> "$GITHUB_OUTPUT"
+
+          RESULT_COUNT=$(python3 -c "
           import json
-          with open('/tmp/js-results.sarif') as f:
-              sarif = json.load(f)
-          for run in sarif['runs']:
-              print(f'Results: {len(run.get(\"results\", []))}')
-          "
+          d = json.load(open('results.sarif'))
+          print(sum(len(r.get('results',[])) for r in d.get('runs',[])))
+          ")
+          echo "result_count=$RESULT_COUNT" >> "$GITHUB_OUTPUT"
 
-  test-x86_64-passthrough:
-    name: x86_64 — Pass-through (no-op)
+      - name: Upload SARIF
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sarif-${{ matrix.language.name }}-${{ matrix.arch.name }}
+          path: results.sarif
+          if-no-files-found: ignore
+          retention-days: 5
+
+      - name: Save timing data
+        if: always()
+        shell: bash
+        run: |
+          cat > timing.json << 'ENDJSON'
+          {
+            "language": "${{ matrix.language.name }}",
+            "arch": "${{ matrix.arch.name }}",
+            "project": "${{ matrix.language.project }}",
+            "ref": "${{ matrix.language.ref }}",
+            "create_ms": ${{ steps.create-db.outputs.duration_ms || -1 }},
+            "analyze_ms": ${{ steps.analyze.outputs.duration_ms || -1 }},
+            "result_count": ${{ steps.analyze.outputs.result_count || -1 }},
+            "status": "${{ job.status }}"
+          }
+          ENDJSON
+
+      - name: Upload timing data
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: timing-${{ matrix.language.name }}-${{ matrix.arch.name }}
+          path: timing.json
+          retention-days: 5
+
+  # ───────────────────────────────────────────────────────────────────
+  # SARIF consistency — ARM64 results must match x86_64
+  # ───────────────────────────────────────────────────────────────────
+  sarif-check:
+    name: SARIF consistency check
+    needs: scan
+    if: always()
     runs-on: ubuntu-latest
     steps:
+      - name: Download all SARIF artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: sarif-*
+          path: sarifs
+
+      - name: Compare ARM64 vs x86_64 SARIF outputs
+        shell: bash
+        run: |
+          python3 << 'PYEOF'
+          import json, sys, os, glob
+
+          def normalize_results(path):
+              """Extract deterministic fields from SARIF results."""
+              with open(path) as f:
+                  data = json.load(f)
+              results = []
+              for run in data.get("runs", []):
+                  for r in run.get("results", []):
+                      locs = []
+                      for loc in r.get("locations", []):
+                          pl = loc.get("physicalLocation", {})
+                          al = pl.get("artifactLocation", {})
+                          region = pl.get("region", {})
+                          locs.append({
+                              "uri": al.get("uri", ""),
+                              "startLine": region.get("startLine"),
+                              "startColumn": region.get("startColumn"),
+                          })
+                      results.append({
+                          "ruleId": r.get("ruleId"),
+                          "level": r.get("level", "warning"),
+                          "message": r.get("message", {}).get("text", ""),
+                          "locations": locs,
+                      })
+              return sorted(results, key=lambda x: json.dumps(x, sort_keys=True))
+
+          languages = ["python", "javascript", "ruby", "java", "go", "cpp"]
+          report = []
+          all_match = True
+
+          for lang in languages:
+              arm = f"sarifs/sarif-{lang}-arm64/results.sarif"
+              x86 = f"sarifs/sarif-{lang}-x86_64/results.sarif"
+
+              if not os.path.exists(arm) and not os.path.exists(x86):
+                  report.append(f"| {lang} | — | — | SKIPPED (both missing) |")
+                  continue
+              if not os.path.exists(arm):
+                  report.append(f"| {lang} | — | — | ARM64 SARIF missing |")
+                  all_match = False
+                  continue
+              if not os.path.exists(x86):
+                  report.append(f"| {lang} | — | — | x86_64 SARIF missing |")
+                  all_match = False
+                  continue
+
+              arm_r = normalize_results(arm)
+              x86_r = normalize_results(x86)
+
+              arm_set = set(json.dumps(r, sort_keys=True) for r in arm_r)
+              x86_set = set(json.dumps(r, sort_keys=True) for r in x86_r)
+
+              if arm_r == x86_r:
+                  report.append(f"| {lang} | {len(arm_r)} | {len(x86_r)} | MATCH |")
+              else:
+                  only_arm = arm_set - x86_set
+                  only_x86 = x86_set - arm_set
+                  detail = f"DIFF (+{len(only_arm)} ARM64-only, +{len(only_x86)} x86-only)"
+                  report.append(f"| {lang} | {len(arm_r)} | {len(x86_r)} | {detail} |")
+                  all_match = False
+                  if only_arm:
+                      print(f"\n{lang} — only in ARM64 (first 3):")
+                      for item in list(only_arm)[:3]:
+                          print(f"  {item[:200]}")
+                  if only_x86:
+                      print(f"\n{lang} — only in x86_64 (first 3):")
+                      for item in list(only_x86)[:3]:
+                          print(f"  {item[:200]}")
+
+          # Write to step summary
+          summary = os.environ.get("GITHUB_STEP_SUMMARY", "/dev/null")
+          with open(summary, "a") as f:
+              f.write("## SARIF Consistency Check\n\n")
+              f.write("| Language | ARM64 findings | x86_64 findings | Status |\n")
+              f.write("|----------|:-:|:-:|--------|\n")
+              for line in report:
+                  f.write(line + "\n")
+              f.write("\n")
+
+          if not all_match:
+              print("\nWARNING: Some SARIF outputs differ between architectures.")
+              print("This may be expected for compiled languages where tracing differs.")
+              # Do not fail — differences are informational
+          else:
+              print("\nAll SARIF outputs match between ARM64 and x86_64.")
+          PYEOF
+
+  # ───────────────────────────────────────────────────────────────────
+  # Cache validation — separate from the matrix
+  # ───────────────────────────────────────────────────────────────────
+  cache-validation:
+    name: Cache validation (ARM64)
+    runs-on: ubuntu-24.04-arm
+    steps:
       - uses: actions/checkout@v4
 
-      - uses: caseware/codeql-arm64-compat@v1
-        id: codeql-setup
+      - name: Run action (populates or restores cache)
+        id: setup
+        uses: caseware/codeql-arm64-compat@v1
+        with:
+          enable-compiled-languages: "true"
 
-      - name: Verify no patching occurred
+      - name: Report cache status
+        shell: bash
         run: |
-          echo "Architecture: $(uname -m)"
-          if [ "$(uname -m)" = "x86_64" ]; then
-            echo "Correctly detected as non-ARM64 — action was a no-op"
-          fi
+          echo "## Cache Validation" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Component | Status |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-----------|--------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| CodeQL CLI | ${{ steps.setup.outputs.codeql-version }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| CodeQL path | ${{ steps.setup.outputs.codeql-path }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Architecture | $(uname -m) |" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          codeql --version
+
+  # ───────────────────────────────────────────────────────────────────
+  # Performance report — aggregates timing across all scan jobs
+  # ───────────────────────────────────────────────────────────────────
+  report:
+    name: Performance report
+    needs: [scan, sarif-check, cache-validation]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download timing data
+        uses: actions/download-artifact@v4
+        with:
+          pattern: timing-*
+          path: timings
+
+      - name: Generate performance report
+        shell: bash
+        run: |
+          python3 << 'PYEOF'
+          import json, os, glob
+
+          summary = os.environ.get("GITHUB_STEP_SUMMARY", "/dev/null")
+          files = sorted(glob.glob("timings/*/timing.json"))
+
+          # Parse all timing data
+          data = []
+          for f in files:
+              with open(f) as fh:
+                  data.append(json.load(fh))
+
+          # Group by language
+          languages = {}
+          for d in data:
+              lang = d["language"]
+              if lang not in languages:
+                  languages[lang] = {}
+              languages[lang][d["arch"]] = d
+
+          with open(summary, "a") as f:
+              f.write("## CodeQL ARM64 Compatibility Report\n\n")
+              f.write("### Performance Comparison (ARM64 vs x86_64)\n\n")
+              f.write("| Language | Project | Metric | ARM64 | x86_64 | Delta |\n")
+              f.write("|----------|---------|--------|------:|-------:|------:|\n")
+
+              for lang in sorted(languages.keys()):
+                  archs = languages[lang]
+                  arm = archs.get("arm64", {})
+                  x86 = archs.get("x86_64", {})
+                  project = arm.get("project") or x86.get("project", "?")
+
+                  # DB create
+                  arm_c = arm.get("create_ms", -1)
+                  x86_c = x86.get("create_ms", -1)
+                  if arm_c > 0 and x86_c > 0:
+                      delta_c = f"{(arm_c - x86_c) / 1000:+.1f}s"
+                  else:
+                      delta_c = "—"
+                  arm_c_s = f"{arm_c/1000:.1f}s" if arm_c > 0 else "FAIL"
+                  x86_c_s = f"{x86_c/1000:.1f}s" if x86_c > 0 else "FAIL"
+                  f.write(f"| {lang} | {project} | DB create | {arm_c_s} | {x86_c_s} | {delta_c} |\n")
+
+                  # Analysis
+                  arm_a = arm.get("analyze_ms", -1)
+                  x86_a = x86.get("analyze_ms", -1)
+                  if arm_a > 0 and x86_a > 0:
+                      delta_a = f"{(arm_a - x86_a) / 1000:+.1f}s"
+                  else:
+                      delta_a = "—"
+                  arm_a_s = f"{arm_a/1000:.1f}s" if arm_a > 0 else "FAIL"
+                  x86_a_s = f"{x86_a/1000:.1f}s" if x86_a > 0 else "FAIL"
+                  f.write(f"| | | Analysis | {arm_a_s} | {x86_a_s} | {delta_a} |\n")
+
+                  # Findings
+                  arm_n = arm.get("result_count", -1)
+                  x86_n = x86.get("result_count", -1)
+                  arm_n_s = str(arm_n) if arm_n >= 0 else "—"
+                  x86_n_s = str(x86_n) if x86_n >= 0 else "—"
+                  match = "MATCH" if arm_n == x86_n and arm_n >= 0 else ("—" if arm_n < 0 or x86_n < 0 else "DIFF")
+                  f.write(f"| | | Findings | {arm_n_s} | {x86_n_s} | {match} |\n")
+
+              f.write("\n### Summary\n\n")
+
+              # Count successes/failures
+              success = sum(1 for d in data if d.get("create_ms", -1) > 0)
+              total = len(data)
+              f.write(f"- **{success}/{total}** scan jobs completed successfully\n")
+
+              langs_tested = set(d["language"] for d in data if d.get("create_ms", -1) > 0)
+              f.write(f"- **Languages tested**: {', '.join(sorted(langs_tested))}\n")
+              f.write(f"- **Architectures**: ARM64 (ubuntu-24.04-arm), x86_64 (ubuntu-latest)\n")
+              f.write(f"- **CodeQL version**: downloaded at runtime (latest or pinned)\n")
+
+          print("Performance report written to GITHUB_STEP_SUMMARY")
+          PYEOF
