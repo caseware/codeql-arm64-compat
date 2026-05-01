@@ -332,39 +332,46 @@ runs:
 
         echo "::endgroup::"
 
-    - name: Cache stub preload_tracer
-      id: stub-cache
+    - name: Resolve stub preload_tracer release tag
+      id: stub-tag
       if: steps.arch.outputs.is_arm64 == 'true'
-      uses: actions/cache@v5
-      with:
-        path: ${{ runner.temp }}/preload_tracer-arm64
-        key: stub-preload-tracer-arm64-v1
-
-    - name: Download stub preload_tracer from release
-      if: steps.arch.outputs.is_arm64 == 'true' && steps.stub-cache.outputs.cache-hit != 'true'
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
-        CACHED: ${{ runner.temp }}/preload_tracer-arm64
         ACTION_REPO: ${{ github.action_repository }}
         CURRENT_REPO: ${{ github.repository }}
-        DOWNLOAD_DIR: ${{ runner.temp }}
       run: |
         REPO="$ACTION_REPO"
         if [ -z "$REPO" ]; then
           REPO="$CURRENT_REPO"
         fi
-
-        echo "Downloading stub binary from latest stub-tracer release..."
         TAG=$(gh release list --repo "$REPO" --json tagName -q '.[].tagName' | grep '^stub-tracer-' | head -1)
+        printf 'tag=%s\n' "${TAG:-none}" >> "$GITHUB_OUTPUT"
+        printf 'repo=%s\n' "$REPO" >> "$GITHUB_OUTPUT"
 
-        if [ -n "$TAG" ]; then
-          gh release download "$TAG" --repo "$REPO" --pattern "preload_tracer-arm64" --dir "$DOWNLOAD_DIR"
-          chmod +x "$CACHED"
-          echo "Downloaded stub from release $TAG"
-        else
-          echo "::warning::No stub-tracer release found in $REPO"
-        fi
+    - name: Cache stub preload_tracer
+      id: stub-cache
+      if: steps.arch.outputs.is_arm64 == 'true' && steps.stub-tag.outputs.tag != 'none'
+      uses: actions/cache@v5
+      with:
+        path: ${{ runner.temp }}/preload_tracer-arm64
+        key: stub-preload-tracer-arm64-${{ steps.stub-tag.outputs.tag }}
+        restore-keys: |
+          stub-preload-tracer-arm64-
+
+    - name: Download stub preload_tracer from release
+      if: steps.arch.outputs.is_arm64 == 'true' && steps.stub-tag.outputs.tag != 'none' && steps.stub-cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        TAG: ${{ steps.stub-tag.outputs.tag }}
+        REPO: ${{ steps.stub-tag.outputs.repo }}
+        DOWNLOAD_DIR: ${{ runner.temp }}
+      run: |
+        echo "Downloading stub binary from release $TAG..."
+        gh release download "$TAG" --repo "$REPO" --pattern "preload_tracer-arm64" --dir "$DOWNLOAD_DIR"
+        chmod +x "$DOWNLOAD_DIR/preload_tracer-arm64"
+        echo "Downloaded stub from release $TAG"
 
     - name: Replace preload_tracer with ARM64 stub
       if: steps.arch.outputs.is_arm64 == 'true'
