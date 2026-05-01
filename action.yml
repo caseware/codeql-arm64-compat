@@ -101,7 +101,6 @@ runs:
 
     - name: Determine CodeQL version
       id: version
-      if: steps.arch.outputs.is_arm64 == 'true'
       shell: bash
       run: |
         if [ "${{ inputs.codeql-version }}" = "latest" ]; then
@@ -114,7 +113,6 @@ runs:
 
     - name: Locate or restore CodeQL
       id: download
-      if: steps.arch.outputs.is_arm64 == 'true'
       shell: bash
       run: |
         VERSION="${{ steps.version.outputs.version }}"
@@ -127,16 +125,18 @@ runs:
           exit 0
         fi
 
-        # 2. Already on the runner (e.g. github/codeql-action already ran)
+        # 2. Already on the runner (well-known tool-cache locations)
         TOOL_DIR="${RUNNER_TOOL_CACHE:-/opt/hostedtoolcache}"
-        EXISTING=$(find "$TOOL_DIR" -maxdepth 3 -name "codeql" -type f -executable 2>/dev/null | head -1)
-        if [ -n "$EXISTING" ]; then
-          CODEQL_DIR=$(dirname "$EXISTING")
-          echo "codeql-dir=$CODEQL_DIR" >> "$GITHUB_OUTPUT"
-          echo "source=runner" >> "$GITHUB_OUTPUT"
-          echo "Found CodeQL already on runner: $CODEQL_DIR"
-          exit 0
-        fi
+        for pattern in "$TOOL_DIR/CodeQL/*/x64/codeql" "$TOOL_DIR/codeql-arm64/codeql"; do
+          for dir in $pattern; do
+            if [ -x "$dir/codeql" ]; then
+              echo "codeql-dir=$dir" >> "$GITHUB_OUTPUT"
+              echo "source=runner" >> "$GITHUB_OUTPUT"
+              echo "Found CodeQL already on runner: $dir"
+              exit 0
+            fi
+          done
+        done
 
         # 3. Will need download — output the target dir for cache/download steps
         CODEQL_DIR="${RUNNER_TOOL_CACHE:-$HOME/.codeql}/codeql-arm64/codeql"
@@ -145,14 +145,14 @@ runs:
 
     - name: Restore cached CodeQL
       id: codeql-cache
-      if: steps.arch.outputs.is_arm64 == 'true' && steps.download.outputs.source == 'download'
+      if: steps.download.outputs.source == 'download'
       uses: actions/cache@v4
       with:
         path: ${{ steps.download.outputs.codeql-dir }}
         key: codeql-linux64-${{ steps.version.outputs.version }}
 
     - name: Download CodeQL
-      if: steps.arch.outputs.is_arm64 == 'true' && steps.download.outputs.source == 'download' && steps.codeql-cache.outputs.cache-hit != 'true'
+      if: steps.download.outputs.source == 'download' && steps.codeql-cache.outputs.cache-hit != 'true'
       shell: bash
       run: |
         VERSION="${{ steps.version.outputs.version }}"
@@ -300,7 +300,6 @@ runs:
 
     - name: Finalize setup
       id: finalize
-      if: steps.arch.outputs.is_arm64 == 'true'
       shell: bash
       run: |
         CODEQL_DIR="${{ steps.download.outputs.codeql-dir }}"
@@ -308,8 +307,10 @@ runs:
         # Add to PATH
         echo "$CODEQL_DIR" >> "$GITHUB_PATH"
 
-        # Set CODEQL_JAVA_HOME as env fallback
-        echo "CODEQL_JAVA_HOME=$CODEQL_DIR/tools/linux64/java-aarch64" >> "$GITHUB_ENV"
+        # ARM64: point at the swapped JDK
+        if [ "$(uname -m)" = "aarch64" ] || [ "$(uname -m)" = "arm64" ]; then
+          echo "CODEQL_JAVA_HOME=$CODEQL_DIR/tools/linux64/java-aarch64" >> "$GITHUB_ENV"
+        fi
 
         # Verify
         echo "::group::Verification"
@@ -321,12 +322,3 @@ runs:
         # Outputs
         echo "codeql-path=$CODEQL_DIR" >> "$GITHUB_OUTPUT"
         echo "codeql-version=${{ steps.version.outputs.version }}" >> "$GITHUB_OUTPUT"
-
-    - name: Pass-through (non-ARM64)
-      if: steps.arch.outputs.is_arm64 == 'false'
-      shell: bash
-      run: |
-        echo "::notice::Not ARM64 — no patching needed. Use github/codeql-action directly."
-        if [ -n "${{ inputs.codeql-path }}" ] && [ -d "${{ inputs.codeql-path }}" ]; then
-          echo "codeql-path=${{ inputs.codeql-path }}" >> "$GITHUB_OUTPUT"
-        fi
