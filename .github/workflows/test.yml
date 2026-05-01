@@ -428,11 +428,78 @@ jobs:
           codeql --version
 
   # ───────────────────────────────────────────────────────────────────
+  # Stub tracer validation — confirms ARM64 stub replaces x86_64 binary
+  # ───────────────────────────────────────────────────────────────────
+  stub-tracer:
+    name: Stub tracer (ARM64)
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Run action
+        id: setup
+        uses: caseware/codeql-arm64-compat@v1
+
+      - name: Verify stub tracer replacement
+        shell: bash
+        env:
+          CODEQL_PATH: ${{ steps.setup.outputs.codeql-path }}
+        run: |
+          TRACER="$CODEQL_PATH/tools/linux64/preload_tracer"
+
+          echo "## Stub Tracer Validation" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          # 1. Tracer must exist
+          if [ ! -f "$TRACER" ]; then
+            echo "::error::preload_tracer not found at $TRACER"
+            exit 1
+          fi
+
+          # 2. Must be an ARM64 ELF (not x86_64)
+          FILE_INFO=$(file "$TRACER")
+          echo "| Check | Result |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-------|--------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Binary | $FILE_INFO |" >> "$GITHUB_STEP_SUMMARY"
+
+          if echo "$FILE_INFO" | grep -qi "aarch64\|ARM aarch64"; then
+            echo "| Architecture | ARM64 ✓ |" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::error::preload_tracer is NOT ARM64: $FILE_INFO"
+            echo "| Architecture | NOT ARM64 ✗ |" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          # 3. Must exit non-zero with diagnostic message
+          set +e
+          OUTPUT=$("$TRACER" 2>&1)
+          EXIT_CODE=$?
+          set -e
+
+          echo "| Exit code | $EXIT_CODE |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Output | $(echo "$OUTPUT" | head -1) |" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$EXIT_CODE" -ne 1 ]; then
+            echo "::error::Stub should exit 1 but exited $EXIT_CODE"
+            exit 1
+          fi
+
+          if ! echo "$OUTPUT" | grep -qi "not supported\|tracing.*not"; then
+            echo "::error::Stub output missing diagnostic message: $OUTPUT"
+            exit 1
+          fi
+
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "All stub tracer checks passed." >> "$GITHUB_STEP_SUMMARY"
+
+  # ───────────────────────────────────────────────────────────────────
   # Performance report — aggregates timing across all scan jobs
   # ───────────────────────────────────────────────────────────────────
   report:
     name: Performance report
-    needs: [scan, sarif-check, cache-validation, version-matrix]
+    needs: [scan, sarif-check, cache-validation, version-matrix, stub-tracer]
     if: always()
     runs-on: ubuntu-latest
     permissions:
