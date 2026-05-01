@@ -324,34 +324,43 @@ runs:
         path: ${{ runner.temp }}/preload_tracer-arm64
         key: stub-preload-tracer-arm64-v1
 
+    - name: Download stub preload_tracer from release
+      if: steps.arch.outputs.is_arm64 == 'true' && steps.stub-cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        CACHED="${{ runner.temp }}/preload_tracer-arm64"
+        REPO="${{ github.action_repository }}"
+        # If running from a local checkout (workflow_dispatch on this repo), use current repo
+        if [ -z "$REPO" ]; then
+          REPO="${{ github.repository }}"
+        fi
+
+        echo "Downloading stub binary from latest stub-tracer release..."
+        # Find the latest stub-tracer-* release tag
+        TAG=$(gh release list --repo "$REPO" --json tagName -q '.[].tagName' | grep '^stub-tracer-' | head -1)
+
+        if [ -n "$TAG" ]; then
+          gh release download "$TAG" --repo "$REPO" --pattern "preload_tracer-arm64" --dir "${{ runner.temp }}"
+          chmod +x "$CACHED"
+          echo "Downloaded stub from release $TAG"
+        else
+          echo "::warning::No stub-tracer release found in $REPO"
+        fi
+
     - name: Replace preload_tracer with ARM64 stub
       if: steps.arch.outputs.is_arm64 == 'true'
       shell: bash
       run: |
         CODEQL_DIR="${{ steps.download.outputs.codeql-dir }}"
         TRACER="$CODEQL_DIR/tools/linux64/preload_tracer"
-        ACTION_DIR="${GITHUB_ACTION_PATH:-.}"
         CACHED="${{ runner.temp }}/preload_tracer-arm64"
 
-        # Prefer action's bin/, fall back to cache
-        if [ -f "$ACTION_DIR/bin/preload_tracer-arm64" ]; then
-          STUB_SRC="$ACTION_DIR/bin/preload_tracer-arm64"
-        elif [ -f "$CACHED" ]; then
-          STUB_SRC="$CACHED"
-          echo "Using cached stub binary"
-        else
-          echo "::warning::No stub binary available (neither in action nor cache)"
-          STUB_SRC=""
-        fi
-
-        if [ -f "$TRACER" ] && [ -n "$STUB_SRC" ]; then
+        if [ -f "$TRACER" ] && [ -f "$CACHED" ]; then
           echo "::group::Replacing preload_tracer with ARM64 stub"
-          cp "$STUB_SRC" "$TRACER"
+          cp "$CACHED" "$TRACER"
           chmod +x "$TRACER"
-          # Populate cache if not already there
-          if [ ! -f "$CACHED" ]; then
-            cp "$STUB_SRC" "$CACHED"
-          fi
           echo "Replaced preload_tracer with ARM64 native stub ($(file "$TRACER" | cut -d: -f2))"
           echo "::endgroup::"
         fi

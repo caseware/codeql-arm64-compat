@@ -1,0 +1,59 @@
+name: Build & Release stub preload_tracer
+
+on:
+  push:
+    branches: [v1]
+    paths:
+      - 'src/stub-tracer.c'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build ARM64 stub & create release
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build static ARM64 binary
+        run: |
+          gcc -static -O2 -o preload_tracer-arm64 src/stub-tracer.c
+          strip preload_tracer-arm64
+          file preload_tracer-arm64
+          sha256sum preload_tracer-arm64
+
+      - name: Compute version tag
+        id: version
+        run: |
+          SHA=$(sha256sum preload_tracer-arm64 | cut -d' ' -f1)
+          SHORT_SHA="${SHA:0:8}"
+          TAG="stub-tracer-${SHORT_SHA}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          SHA256="${{ steps.version.outputs.sha256 }}"
+
+          # Skip if this exact binary was already released
+          if gh release view "$TAG" &>/dev/null; then
+            echo "Release $TAG already exists, skipping"
+            exit 0
+          fi
+
+          # Create new release (previous releases are kept for auditability)
+          gh release create "$TAG" \
+            preload_tracer-arm64 \
+            --title "Stub preload_tracer (ARM64)" \
+            --notes "Pre-built static ARM64 binary that replaces CodeQL's x86_64 preload_tracer.
+
+          **SHA-256:** \`${SHA256}\`
+
+          Built natively on \`ubuntu-24.04-arm\` from \`src/stub-tracer.c\`.
+          Downloaded automatically by the action at runtime."
+
+          echo "Released as $TAG"
