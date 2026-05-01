@@ -76,10 +76,14 @@ jobs:
 
           BUILD_CMD="${{ matrix.language.build-cmd }}"
           if [ -n "$BUILD_CMD" ]; then
+            # Write build script to avoid shell quoting issues with --command
+            echo '#!/usr/bin/env bash' > .codeql-build.sh
+            echo "$BUILD_CMD" >> .codeql-build.sh
+            chmod +x .codeql-build.sh
             codeql database create codeql-db \
               --language="${{ matrix.language.name }}" \
               --source-root=. \
-              --command="$BUILD_CMD" \
+              --command=./.codeql-build.sh \
               --overwrite 2>&1 | tail -30
           else
             codeql database create codeql-db \
@@ -98,8 +102,10 @@ jobs:
           START_NS=$(date +%s%N)
 
           codeql database analyze codeql-db \
+            "codeql/${{ matrix.language.name }}-queries" \
             --format=sarif-latest \
-            --output=results.sarif 2>&1 | tail -20
+            --output=results.sarif \
+            --download 2>&1 | tail -20
 
           END_NS=$(date +%s%N)
           echo "duration_ms=$(( (END_NS - START_NS) / 1000000 ))" >> "$GITHUB_OUTPUT"
