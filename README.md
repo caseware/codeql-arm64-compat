@@ -329,10 +329,10 @@ export QEMU_LD_PREFIX=/tmp/x86_64-rootfs
 
 ## Contributing
 
-Issues and PRs welcome. Key areas for improvement:
-- [ ] Testing matrix across CodeQL versions
-- [ ] Native ARM64 CodeQL extractors when GitHub ships them
-- [ ] Pre-built stub-tracer release assets (currently compiled at action time)
+Issues and PRs welcome. The test suite validates across multiple CodeQL versions,
+7 languages, and both ARM64/x86_64 architectures. The stub `preload_tracer` is
+pre-built as a static ARM64 binary (`bin/preload_tracer-arm64`) and committed to
+the repo — rebuild from source with `aarch64-linux-gnu-gcc -static -O2 -o bin/preload_tracer-arm64 src/stub-tracer.c`.
 
 ## License
 

@@ -325,22 +325,18 @@ runs:
         ACTION_DIR="${GITHUB_ACTION_PATH:-.}"
 
         if [ -f "$TRACER" ]; then
-          echo "::group::Building ARM64 stub preload_tracer"
-          # Build from source in this action's repo
-          if [ -f "$ACTION_DIR/src/stub-tracer.c" ]; then
-            gcc -static -O2 -o "$TRACER" "$ACTION_DIR/src/stub-tracer.c"
+          echo "::group::Replacing preload_tracer with ARM64 stub"
+          if [ -f "$ACTION_DIR/bin/preload_tracer-arm64" ]; then
+            cp "$ACTION_DIR/bin/preload_tracer-arm64" "$TRACER"
+            chmod +x "$TRACER"
           else
-            # Inline fallback if action source isn't available
-            cat > /tmp/stub_tracer.c << 'STUBEOF'
-        #include <stdio.h>
-        int main(int argc, char *argv[]) {
-            fprintf(stderr, "[codeql-arm64-compat] Build tracing is NOT supported on ARM64.\n");
-            fprintf(stderr, "Use --build-mode=none for buildless analysis.\n");
-            return 1;
-        }
-        STUBEOF
-            gcc -static -O2 -o "$TRACER" /tmp/stub_tracer.c
-            rm -f /tmp/stub_tracer.c
+            echo "::warning::Pre-built stub not found at $ACTION_DIR/bin/preload_tracer-arm64, compiling from source"
+            if [ -f "$ACTION_DIR/src/stub-tracer.c" ]; then
+              gcc -static -O2 -o "$TRACER" "$ACTION_DIR/src/stub-tracer.c"
+            else
+              echo "::error::Neither pre-built binary nor source found for stub tracer"
+              exit 1
+            fi
           fi
           echo "Replaced preload_tracer with ARM64 native stub ($(file "$TRACER" | cut -d: -f2))"
           echo "::endgroup::"

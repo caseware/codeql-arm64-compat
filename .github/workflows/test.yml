@@ -48,9 +48,9 @@ jobs:
           - name: go
             project: gorilla/mux
             ref: "v1.8.1"
-            compiled: true
+            compiled: false
             build-cmd: ""
-            arm64-build-mode: "none"
+            arm64-build-mode: ""
           - name: cpp
             project: DaveGamble/cJSON
             ref: "v1.7.18"
@@ -58,8 +58,8 @@ jobs:
             build-cmd: "mkdir build && cd build && cmake .. && make"
             arm64-build-mode: "none"
           - name: rust
-            project: nickel-org/nickel.rs
-            ref: "0.11.0"
+            project: BurntSushi/ripgrep
+            ref: "14.1.1"
             compiled: true
             build-cmd: ""
             arm64-build-mode: "none"
@@ -69,7 +69,7 @@ jobs:
           - name: x86_64
             runner: ubuntu-latest
 
-    # Buildless mode on ARM64 may not be supported for all languages (e.g. Go).
+    # Buildless mode on ARM64 may produce different findings than traced x86_64.
     # Interpreted languages and x86_64 jobs must always pass.
     continue-on-error: ${{ matrix.arch.name == 'arm64' && matrix.language.arm64-build-mode == 'none' }}
     steps:
@@ -236,7 +236,7 @@ jobs:
 
           # Languages that use --build-mode=none on ARM64 (buildless).
           # Buildless may produce different results or fail entirely.
-          buildless_on_arm64 = {"java", "go", "cpp", "rust"}
+          buildless_on_arm64 = {"java", "cpp", "rust"}
           languages = ["python", "javascript", "ruby", "java", "go", "cpp", "rust"]
           report = []
           has_real_diff = False
@@ -313,6 +313,64 @@ jobs:
           PYEOF
 
   # ───────────────────────────────────────────────────────────────────
+  # CodeQL version matrix — validates across multiple releases
+  # ───────────────────────────────────────────────────────────────────
+  version-matrix:
+    name: "CodeQL ${{ matrix.codeql-version }} (ARM64)"
+    runs-on: ubuntu-24.04-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        codeql-version:
+          - "latest"
+          - "v2.25.2"
+          - "v2.20.0"
+    steps:
+      - name: Checkout test project
+        uses: actions/checkout@v4
+        with:
+          repository: pallets/flask
+          ref: "3.1.1"
+
+      - name: Checkout action
+        uses: actions/checkout@v4
+        with:
+          path: .codeql-arm64-action
+
+      - name: Setup CodeQL (ARM64 compat)
+        id: setup
+        uses: ./.codeql-arm64-action
+        with:
+          codeql-version: ${{ matrix.codeql-version }}
+
+      - name: Create CodeQL database
+        run: |
+          codeql database create codeql-db \
+            --language=python \
+            --source-root=. \
+            --overwrite 2>&1 | tail -20
+
+      - name: Run CodeQL analysis
+        run: |
+          codeql database analyze codeql-db \
+            --format=sarif-latest \
+            --output=results.sarif \
+            --download \
+            codeql/python-queries 2>&1 | tail -10
+
+      - name: Report results
+        shell: bash
+        run: |
+          FINDINGS=$(python3 -c "import json; d=json.load(open('results.sarif')); print(sum(len(r.get('results',[])) for r in d.get('runs',[])))")
+          echo "## CodeQL ${{ matrix.codeql-version }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Metric | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|--------|-------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Version | $(codeql --version 2>&1 | head -1) |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Architecture | $(uname -m) |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Findings | $FINDINGS |" >> "$GITHUB_STEP_SUMMARY"
+
+  # ───────────────────────────────────────────────────────────────────
   # Cache validation — separate from the matrix
   # ───────────────────────────────────────────────────────────────────
   cache-validation:
@@ -345,7 +403,7 @@ jobs:
   # ───────────────────────────────────────────────────────────────────
   report:
     name: Performance report
-    needs: [scan, sarif-check, cache-validation]
+    needs: [scan, sarif-check, cache-validation, version-matrix]
     if: always()
     runs-on: ubuntu-latest
     steps:
