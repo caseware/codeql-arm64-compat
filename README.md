@@ -51,15 +51,36 @@ jobs:
           sarif_file: results.sarif
 ```
 
-### Compiled languages (C/C++)
+### Compiled languages — buildless on ARM64
+
+Build tracing does not work on ARM64 (see [Known limitations](#why-traced-builds-dont-work-on-arm64)).
+Use `--build-mode=none` for buildless analysis:
 
 ```yaml
+jobs:
+  codeql:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
       - uses: your-org/codeql-arm64-action@v1
         with:
           enable-compiled-languages: 'true'
+
+      - name: Create database (buildless)
+        run: |
+          codeql database create ./codeql-db \
+            --language=java \
+            --source-root=. \
+            --build-mode=none
+
+      - name: Run analysis
+        run: |
+          codeql database analyze ./codeql-db codeql/java-queries \
+            --format=sarif-latest --output=results.sarif --download
 ```
 
-This downloads an Ubuntu 22.04 amd64 base tarball and sets `QEMU_LD_PREFIX` so the dynamically-linked tracer binaries (`preload_tracer`, `runner`) can resolve glibc under QEMU. Not needed for interpreted languages.
+Supported for Java/Kotlin, C/C++, C#, and Swift. **Not** supported for Go (requires x86_64 runner).
 
 ### With `github/codeql-action` (init/analyze pattern)
 
@@ -201,21 +222,68 @@ For Python, JavaScript, Ruby, Go, Java, and C#, the CodeQL extractors are Java-b
 | `ubuntu-24.04-arm` (GitHub-hosted) | Supported |
 | `ubuntu-22.04-arm` (GitHub-hosted) | Supported |
 | Self-hosted ARM64 (Ubuntu 22.04+) | Supported |
+| `ubuntu-latest` (x86_64) | Pass-through (downloads CodeQL, skips ARM64 patches) |
 | macOS ARM64 | Not needed (CodeQL has native macOS ARM64 support) |
 
-## Languages tested
+## Language support matrix
 
-| Language | Database creation | Analysis | `enable-compiled-languages` needed? |
-|----------|------------------|----------|--------------------------------------|
-| Python | Yes | Yes | No |
-| JavaScript/TypeScript | Yes | Yes | No |
-| Ruby | Yes | Yes | No |
-| Go | Yes | Yes | No |
-| Java | Yes | Yes | No |
-| C/C++ | Yes* | Yes | **Yes** |
-| C# | Yes* | Yes | **Yes** |
+### Interpreted languages — full ARM64 support
 
-*\* Compiled language extraction requires `enable-compiled-languages: 'true'` for the x86_64 tracer binaries.*
+| Language | ARM64 status | SARIF identical to x86_64? | `enable-compiled-languages` needed? |
+|----------|:---:|:---:|:---:|
+| Python | **Full** | Yes | No |
+| JavaScript/TypeScript | **Full** | Yes | No |
+| Ruby | **Full** | Yes | Yes* |
+
+These languages use Java-based extractors that run natively via the ARM64 JDK.
+SARIF output is identical between ARM64 and x86_64 runners.
+
+\* Ruby's extractor has native x86_64 binaries that need the x86_64 libs for QEMU.
+
+### Compiled languages — buildless mode on ARM64
+
+| Language | ARM64 status | Build mode on ARM64 | `enable-compiled-languages` needed? | Notes |
+|----------|:---:|:---:|:---:|-------|
+| Java/Kotlin | **Buildless** | `--build-mode=none` | Yes | Analyses source without building |
+| C/C++ | **Buildless** | `--build-mode=none` | Yes | Analyses source without building |
+| Rust | **Experimental** | `--build-mode=none` | Yes | CodeQL Rust support is experimental |
+| Go | **x86_64 only** | Not supported | — | Go does not support `--build-mode=none` |
+| C# | **Buildless** | `--build-mode=none` | Yes | Not yet tested |
+
+#### Why traced builds don't work on ARM64
+
+CodeQL's `preload_tracer` is an x86_64 binary that uses `LD_PRELOAD` to inject an x86_64
+shared library into build processes to intercept filesystem calls. On ARM64 runners the build
+tools (gcc, javac, go build, etc.) are native ARM64 binaries — you cannot inject an x86_64
+`.so` into an ARM64 process. The tracer crashes with SIGSEGV (exit code 139).
+
+This action replaces the `preload_tracer` with a native ARM64 stub (`src/stub-tracer.c`) that
+prints a clear diagnostic and exits 1, instead of the cryptic SIGSEGV crash. If you
+accidentally attempt a traced build on ARM64, you'll see:
+
+```
+================================================================
+ codeql-arm64-compat: build tracing is NOT supported on ARM64
+================================================================
+
+ Workaround: use --build-mode=none (buildless analysis).
+================================================================
+```
+
+#### Buildless analysis trade-offs
+
+`--build-mode=none` analyses source code without a build step. Trade-offs:
+
+| Aspect | Traced (x86_64) | Buildless (ARM64) |
+|--------|:---:|:---:|
+| Interprocedural data flow | Full | Reduced |
+| Call graph resolution | Full | Heuristic |
+| Build-time type resolution | Full | Partial |
+| Source-level pattern queries | Full | Full |
+| Security queries (OWASP) | Full | Most |
+
+For security scanning, buildless mode catches the majority of findings. The primary gap is
+in interprocedural data-flow analysis that depends on build-time type resolution.
 
 ## Troubleshooting
 
@@ -265,10 +333,10 @@ export QEMU_LD_PREFIX=/tmp/x86_64-rootfs
 ## Contributing
 
 Issues and PRs welcome. Key areas for improvement:
-- [ ] Cached ARM64 JDK downloads via `actions/cache`
-- [ ] Performance benchmarks vs native x86_64
 - [ ] Testing matrix across CodeQL versions
-- [ ] Auto-detection of compiled vs interpreted language to skip rootfs when not needed
+- [ ] Native ARM64 CodeQL extractors when GitHub ships them
+- [ ] Pre-built stub-tracer release assets (currently compiled at action time)
+- [ ] Go ARM64 support (blocked on CodeQL adding `--build-mode=none` for Go)
 
 ## License
 
