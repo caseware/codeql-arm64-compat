@@ -83,18 +83,20 @@ jobs:
       - name: Create CodeQL database
         id: create-db
         shell: bash
+        env:
+          ARM64_MODE: ${{ matrix.language.arm64-build-mode }}
+          BUILD_CMD: ${{ matrix.language.build-cmd }}
+          LANG_NAME: ${{ matrix.language.name }}
         run: |
           START_NS=$(date +%s%N)
 
           ARCH=$(uname -m)
-          ARM64_MODE="${{ matrix.language.arm64-build-mode }}"
-          BUILD_CMD="${{ matrix.language.build-cmd }}"
 
           if [ "$ARCH" = "aarch64" ] && [ -n "$ARM64_MODE" ]; then
             # ARM64 buildless mode — analyse source without a build step
             echo "Using --build-mode=$ARM64_MODE on ARM64"
             codeql database create codeql-db \
-              --language="${{ matrix.language.name }}" \
+              --language="$LANG_NAME" \
               --source-root=. \
               --build-mode="$ARM64_MODE" \
               --overwrite 2>&1 | tail -30
@@ -104,14 +106,14 @@ jobs:
             echo "$BUILD_CMD" >> .codeql-build.sh
             chmod +x .codeql-build.sh
             codeql database create codeql-db \
-              --language="${{ matrix.language.name }}" \
+              --language="$LANG_NAME" \
               --source-root=. \
               --command=./.codeql-build.sh \
               --overwrite 2>&1 | tail -30
           else
             # Default: autobuild (interpreted langs + x86_64 compiled)
             codeql database create codeql-db \
-              --language="${{ matrix.language.name }}" \
+              --language="$LANG_NAME" \
               --source-root=. \
               --overwrite 2>&1 | tail -30
           fi
@@ -122,11 +124,13 @@ jobs:
       - name: Run CodeQL analysis
         id: analyze
         shell: bash
+        env:
+          LANG_NAME: ${{ matrix.language.name }}
         run: |
           START_NS=$(date +%s%N)
 
           codeql database analyze codeql-db \
-            "codeql/${{ matrix.language.name }}-queries" \
+            "codeql/${LANG_NAME}-queries" \
             --format=sarif-latest \
             --output=results.sarif \
             --download 2>&1 | tail -20
@@ -153,9 +157,18 @@ jobs:
       - name: Save timing data
         if: always()
         shell: bash
+        env:
+          ARM64_MODE: ${{ matrix.language.arm64-build-mode }}
+          LANG_NAME: ${{ matrix.language.name }}
+          ARCH_NAME: ${{ matrix.arch.name }}
+          PROJECT_NAME: ${{ matrix.language.project }}
+          REF_NAME: ${{ matrix.language.ref }}
+          CREATE_MS: ${{ steps.create-db.outputs.duration_ms || -1 }}
+          ANALYZE_MS: ${{ steps.analyze.outputs.duration_ms || -1 }}
+          RESULT_COUNT: ${{ steps.analyze.outputs.result_count || -1 }}
+          JOB_STATUS: ${{ job.status }}
         run: |
           ARCH=$(uname -m)
-          ARM64_MODE="${{ matrix.language.arm64-build-mode }}"
           if [ "$ARCH" = "aarch64" ] && [ -n "$ARM64_MODE" ]; then
             BUILD_MODE="$ARM64_MODE"
           else
@@ -163,15 +176,15 @@ jobs:
           fi
           cat > timing.json << ENDJSON
           {
-            "language": "${{ matrix.language.name }}",
-            "arch": "${{ matrix.arch.name }}",
-            "project": "${{ matrix.language.project }}",
-            "ref": "${{ matrix.language.ref }}",
+            "language": "$LANG_NAME",
+            "arch": "$ARCH_NAME",
+            "project": "$PROJECT_NAME",
+            "ref": "$REF_NAME",
             "build_mode": "$BUILD_MODE",
-            "create_ms": ${{ steps.create-db.outputs.duration_ms || -1 }},
-            "analyze_ms": ${{ steps.analyze.outputs.duration_ms || -1 }},
-            "result_count": ${{ steps.analyze.outputs.result_count || -1 }},
-            "status": "${{ job.status }}"
+            "create_ms": $CREATE_MS,
+            "analyze_ms": $ANALYZE_MS,
+            "result_count": $RESULT_COUNT,
+            "status": "$JOB_STATUS"
           }
           ENDJSON
 
@@ -355,9 +368,11 @@ jobs:
 
       - name: Report results
         shell: bash
+        env:
+          CODEQL_VER: ${{ matrix.codeql-version }}
         run: |
           FINDINGS=$(python3 -c "import json; d=json.load(open('results.sarif')); print(sum(len(r.get('results',[])) for r in d.get('runs',[])))")
-          echo "## CodeQL ${{ matrix.codeql-version }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "## CodeQL $CODEQL_VER" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "| Metric | Value |" >> "$GITHUB_STEP_SUMMARY"
           echo "|--------|-------|" >> "$GITHUB_STEP_SUMMARY"
@@ -382,13 +397,16 @@ jobs:
 
       - name: Report cache status
         shell: bash
+        env:
+          SETUP_VERSION: ${{ steps.setup.outputs.codeql-version }}
+          SETUP_PATH: ${{ steps.setup.outputs.codeql-path }}
         run: |
           echo "## Cache Validation" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "| Component | Status |" >> "$GITHUB_STEP_SUMMARY"
           echo "|-----------|--------|" >> "$GITHUB_STEP_SUMMARY"
-          echo "| CodeQL CLI | ${{ steps.setup.outputs.codeql-version }} |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| CodeQL path | ${{ steps.setup.outputs.codeql-path }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| CodeQL CLI | $SETUP_VERSION |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| CodeQL path | $SETUP_PATH |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Architecture | $(uname -m) |" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           codeql --version
@@ -518,12 +536,13 @@ jobs:
       - name: Gate check
         if: always()
         shell: bash
+        env:
+          SCAN: ${{ needs.scan.result }}
+          SARIF: ${{ needs.sarif-check.result }}
+          CACHE: ${{ needs.cache-validation.result }}
+          VERSIONS: ${{ needs.version-matrix.result }}
         run: |
           echo "Checking upstream job results..."
-          SCAN="${{ needs.scan.result }}"
-          SARIF="${{ needs.sarif-check.result }}"
-          CACHE="${{ needs.cache-validation.result }}"
-          VERSIONS="${{ needs.version-matrix.result }}"
 
           echo "  scan:             $SCAN"
           echo "  sarif-check:      $SARIF"

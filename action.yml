@@ -120,26 +120,31 @@ runs:
     - name: Determine CodeQL version
       id: version
       shell: bash
+      env:
+        INPUT_CODEQL_VERSION: ${{ inputs.codeql-version }}
       run: |
-        if [ "${{ inputs.codeql-version }}" = "latest" ]; then
+        if [ "$INPUT_CODEQL_VERSION" = "latest" ]; then
           VERSION=$(curl -sI "https://github.com/github/codeql-cli-binaries/releases/latest" | grep -i ^location | sed 's|.*/tag/||' | tr -d '\r\n')
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
         else
-          echo "version=${{ inputs.codeql-version }}" >> "$GITHUB_OUTPUT"
+          echo "version=$INPUT_CODEQL_VERSION" >> "$GITHUB_OUTPUT"
         fi
         echo "::notice::Using CodeQL version: $(cat "$GITHUB_OUTPUT" | grep version | cut -d= -f2)"
 
     - name: Locate or restore CodeQL
       id: download
       shell: bash
+      env:
+        INPUT_CODEQL_PATH: ${{ inputs.codeql-path }}
+        CODEQL_VERSION: ${{ steps.version.outputs.version }}
       run: |
-        VERSION="${{ steps.version.outputs.version }}"
+        VERSION="$CODEQL_VERSION"
 
         # 1. User-provided path
-        if [ -n "${{ inputs.codeql-path }}" ] && [ -d "${{ inputs.codeql-path }}" ]; then
-          echo "codeql-dir=${{ inputs.codeql-path }}" >> "$GITHUB_OUTPUT"
+        if [ -n "$INPUT_CODEQL_PATH" ] && [ -d "$INPUT_CODEQL_PATH" ]; then
+          echo "codeql-dir=$INPUT_CODEQL_PATH" >> "$GITHUB_OUTPUT"
           echo "source=provided" >> "$GITHUB_OUTPUT"
-          echo "Using existing CodeQL at: ${{ inputs.codeql-path }}"
+          echo "Using existing CodeQL at: $INPUT_CODEQL_PATH"
           exit 0
         fi
 
@@ -172,9 +177,10 @@ runs:
     - name: Download CodeQL
       if: steps.download.outputs.source == 'download' && steps.codeql-cache.outputs.cache-hit != 'true'
       shell: bash
+      env:
+        VERSION: ${{ steps.version.outputs.version }}
+        CODEQL_DIR: ${{ steps.download.outputs.codeql-dir }}
       run: |
-        VERSION="${{ steps.version.outputs.version }}"
-        CODEQL_DIR="${{ steps.download.outputs.codeql-dir }}"
         PARENT_DIR=$(dirname "$CODEQL_DIR")
         mkdir -p "$PARENT_DIR"
 
@@ -189,9 +195,11 @@ runs:
       id: jdk-version
       if: steps.arch.outputs.is_arm64 == 'true'
       shell: bash
+      env:
+        CODEQL_DIR: ${{ steps.download.outputs.codeql-dir }}
+        INPUT_JAVA_VERSION: ${{ inputs.java-version }}
       run: |
-        CODEQL_DIR="${{ steps.download.outputs.codeql-dir }}"
-        JAVA_MAJOR="${{ inputs.java-version }}"
+        JAVA_MAJOR="$INPUT_JAVA_VERSION"
         BUNDLED_VERSION=""
 
         if [ -f "$CODEQL_DIR/tools/linux64/java/release" ]; then
@@ -221,10 +229,11 @@ runs:
     - name: Download ARM64 JDK
       if: steps.arch.outputs.is_arm64 == 'true' && steps.jdk-cache.outputs.cache-hit != 'true'
       shell: bash
+      env:
+        CODEQL_DIR: ${{ steps.download.outputs.codeql-dir }}
+        JAVA_MAJOR: ${{ steps.jdk-version.outputs.java-major }}
+        BUNDLED_VERSION: ${{ steps.jdk-version.outputs.bundled-version }}
       run: |
-        CODEQL_DIR="${{ steps.download.outputs.codeql-dir }}"
-        JAVA_MAJOR="${{ steps.jdk-version.outputs.java-major }}"
-        BUNDLED_VERSION="${{ steps.jdk-version.outputs.bundled-version }}"
 
         echo "::group::Downloading ARM64 Temurin JDK ${JAVA_MAJOR}"
 
@@ -269,8 +278,10 @@ runs:
     - name: Fix ELF interpreter
       if: steps.arch.outputs.is_arm64 == 'true'
       shell: bash
+      env:
+        CODEQL_DIR: ${{ steps.download.outputs.codeql-dir }}
       run: |
-        JAVA_BIN="${{ steps.download.outputs.codeql-dir }}/tools/linux64/java-aarch64/bin/java"
+        JAVA_BIN="$CODEQL_DIR/tools/linux64/java-aarch64/bin/java"
         INTERP=$(readelf -l "$JAVA_BIN" 2>/dev/null | grep "interpreter:" | sed 's/.*: \(.*\)]/\1/' || true)
         if [ -n "$INTERP" ] && [ ! -f "$INTERP" ]; then
           REAL_LD=$(find /lib /usr/lib -name "ld-linux-aarch64*" -type f 2>/dev/null | head -1)
@@ -286,8 +297,9 @@ runs:
     - name: Patch CodeQL launcher script
       if: steps.arch.outputs.is_arm64 == 'true'
       shell: bash
+      env:
+        CODEQL_DIR: ${{ steps.download.outputs.codeql-dir }}
       run: |
-        CODEQL_DIR="${{ steps.download.outputs.codeql-dir }}"
         LAUNCHER="$CODEQL_DIR/codeql"
 
         echo "::group::Patching CodeQL launcher for Linux ARM64"
@@ -329,20 +341,21 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
+        CACHED: ${{ runner.temp }}/preload_tracer-arm64
+        ACTION_REPO: ${{ github.action_repository }}
+        CURRENT_REPO: ${{ github.repository }}
+        DOWNLOAD_DIR: ${{ runner.temp }}
       run: |
-        CACHED="${{ runner.temp }}/preload_tracer-arm64"
-        REPO="${{ github.action_repository }}"
-        # If running from a local checkout (workflow_dispatch on this repo), use current repo
+        REPO="$ACTION_REPO"
         if [ -z "$REPO" ]; then
-          REPO="${{ github.repository }}"
+          REPO="$CURRENT_REPO"
         fi
 
         echo "Downloading stub binary from latest stub-tracer release..."
-        # Find the latest stub-tracer-* release tag
         TAG=$(gh release list --repo "$REPO" --json tagName -q '.[].tagName' | grep '^stub-tracer-' | head -1)
 
         if [ -n "$TAG" ]; then
-          gh release download "$TAG" --repo "$REPO" --pattern "preload_tracer-arm64" --dir "${{ runner.temp }}"
+          gh release download "$TAG" --repo "$REPO" --pattern "preload_tracer-arm64" --dir "$DOWNLOAD_DIR"
           chmod +x "$CACHED"
           echo "Downloaded stub from release $TAG"
         else
@@ -352,10 +365,11 @@ runs:
     - name: Replace preload_tracer with ARM64 stub
       if: steps.arch.outputs.is_arm64 == 'true'
       shell: bash
+      env:
+        CODEQL_DIR: ${{ steps.download.outputs.codeql-dir }}
+        CACHED: ${{ runner.temp }}/preload_tracer-arm64
       run: |
-        CODEQL_DIR="${{ steps.download.outputs.codeql-dir }}"
         TRACER="$CODEQL_DIR/tools/linux64/preload_tracer"
-        CACHED="${{ runner.temp }}/preload_tracer-arm64"
 
         if [ -f "$TRACER" ] && [ -f "$CACHED" ]; then
           echo "::group::Replacing preload_tracer with ARM64 stub"
@@ -368,8 +382,10 @@ runs:
     - name: Finalize setup
       id: finalize
       shell: bash
+      env:
+        CODEQL_DIR: ${{ steps.download.outputs.codeql-dir }}
+        CODEQL_VER: ${{ steps.version.outputs.version }}
       run: |
-        CODEQL_DIR="${{ steps.download.outputs.codeql-dir }}"
 
         # Add to PATH
         echo "$CODEQL_DIR" >> "$GITHUB_PATH"
@@ -388,4 +404,4 @@ runs:
 
         # Outputs
         echo "codeql-path=$CODEQL_DIR" >> "$GITHUB_OUTPUT"
-        echo "codeql-version=${{ steps.version.outputs.version }}" >> "$GITHUB_OUTPUT"
+        echo "codeql-version=$CODEQL_VER" >> "$GITHUB_OUTPUT"

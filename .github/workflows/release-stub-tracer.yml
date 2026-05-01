@@ -2,7 +2,7 @@ name: Build & Release stub preload_tracer
 
 on:
   push:
-    branches: [v1, devin/1777599448-stub-tracer-prebuilt]
+    branches: [v1]
     paths:
       - 'src/stub-tracer.c'
 
@@ -35,9 +35,9 @@ jobs:
       - name: Create or update release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          SHA256: ${{ steps.version.outputs.sha256 }}
         run: |
-          TAG="${{ steps.version.outputs.tag }}"
-          SHA256="${{ steps.version.outputs.sha256 }}"
 
           # Skip if this exact binary was already released
           if gh release view "$TAG" &>/dev/null; then
