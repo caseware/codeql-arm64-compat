@@ -158,21 +158,21 @@ The JDK version is auto-detected from `tools/linux64/java/release`. Override onl
 │  ARM64 Runner                                               │
 │                                                             │
 │  ┌──────────────────────┐    ┌────────────────────────────┐ │
-│  │ codeql (shell script)│───▶│ ARM64 JDK (Temurin)       │ │
+│  │ codeql (shell script)│───▶│ ARM64 JDK (Temurin)        │ │
 │  │                      │    │ → codeql.jar (eval engine) │ │
 │  └──────────┬───────────┘    └────────────────────────────┘ │
 │             │                                               │
 │             │ execve() on x86_64 ELF                        │
 │             ▼                                               │
 │  ┌──────────────────────┐    ┌────────────────────────────┐ │
-│  │ binfmt_misc (kernel) │───▶│ qemu-x86_64-static        │ │
+│  │ binfmt_misc (kernel) │───▶│ qemu-x86_64-static         │ │
 │  │                      │    │ (from docker/setup-qemu)   │ │
 │  └──────────────────────┘    └─────────────┬──────────────┘ │
 │                                            │                │
 │                              ┌─────────────▼──────────────┐ │
 │                              │ x86_64 glibc libs (cached) │ │
-│                              │ QEMU_LD_PREFIX=/tmp/rootfs  │ │
-│                              │ (only when enabled)         │ │
+│                              │ QEMU_LD_PREFIX=/tmp/rootfs │ │
+│                              │ (only when enabled)        │ │
 │                              └────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────┘
 ```
