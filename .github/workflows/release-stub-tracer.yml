@@ -2,7 +2,7 @@ name: Build & Release stub preload_tracer
 
 on:
   push:
-    branches: [v1]
+    branches: [v1, devin/1777599448-stub-tracer-prebuilt]
     paths:
       - 'src/stub-tracer.c'
 
