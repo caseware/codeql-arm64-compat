@@ -26,13 +26,13 @@ jobs:
             build-cmd: ""
           - name: javascript
             project: expressjs/express
-            ref: "v4.21.2"
+            ref: "4.21.2"
             compiled: false
             build-cmd: ""
           - name: ruby
             project: rack/rack
             ref: "v3.1.12"
-            compiled: false
+            compiled: true
             build-cmd: ""
           - name: java
             project: google/gson
@@ -55,6 +55,9 @@ jobs:
           - name: x86_64
             runner: ubuntu-latest
 
+    # Compiled languages on ARM64 may fail — x86_64 tracer can't inject into
+    # ARM64 build processes. These are expected failures we document in the report.
+    continue-on-error: ${{ matrix.arch.name == 'arm64' && matrix.language.compiled == true }}
     steps:
       - name: Checkout test project
         uses: actions/checkout@v4

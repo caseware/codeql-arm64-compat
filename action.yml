@@ -92,12 +92,30 @@ runs:
         echo "x86_64 libs extracted to $ROOTFS_DIR ($(du -sh "$ROOTFS_DIR" | cut -f1))"
         echo "::endgroup::"
 
-    - name: Set QEMU_LD_PREFIX
+    - name: Install x86_64 libs for QEMU
       if: steps.arch.outputs.is_arm64 == 'true' && inputs.enable-compiled-languages == 'true'
       shell: bash
       run: |
         ROOTFS_DIR="${RUNNER_TEMP:-/tmp}/x86_64-rootfs"
+
+        # Set QEMU_LD_PREFIX (works for direct QEMU invocations)
         echo "QEMU_LD_PREFIX=$ROOTFS_DIR" >> "$GITHUB_ENV"
+
+        # Also create symlinks in standard x86_64 multiarch paths as fallback.
+        # QEMU_LD_PREFIX may not propagate through all process chains (e.g.
+        # CodeQL's Java → runner → preload_tracer chain). The symlinks ensure
+        # x86_64 binaries always find the dynamic linker and glibc regardless
+        # of how they're spawned. Only x86_64 binaries use these paths.
+        LD_SO=$(find "$ROOTFS_DIR" -name 'ld-linux-x86-64.so.2' -type f 2>/dev/null | head -1)
+        if [ -n "$LD_SO" ]; then
+          sudo mkdir -p /lib64 /lib/x86_64-linux-gnu
+          sudo ln -sf "$LD_SO" /lib64/ld-linux-x86-64.so.2
+          for lib in libc.so.6 libm.so.6 libdl.so.2 libpthread.so.0; do
+            SRC=$(find "$ROOTFS_DIR" -name "$lib" -type f 2>/dev/null | head -1)
+            [ -n "$SRC" ] && sudo ln -sf "$SRC" /lib/x86_64-linux-gnu/$lib
+          done
+          echo "x86_64 libs symlinked into standard multiarch paths"
+        fi
 
     - name: Determine CodeQL version
       id: version
