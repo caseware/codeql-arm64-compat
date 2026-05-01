@@ -200,24 +200,30 @@ jobs:
                       })
               return sorted(results, key=lambda x: json.dumps(x, sort_keys=True))
 
+          # compiled: languages where ARM64 tracing is expected to fail
+          compiled_langs = {"java", "go", "cpp"}
           languages = ["python", "javascript", "ruby", "java", "go", "cpp"]
           report = []
-          all_match = True
+          has_real_diff = False
 
           for lang in languages:
               arm = f"sarifs/sarif-{lang}-arm64/results.sarif"
               x86 = f"sarifs/sarif-{lang}-x86_64/results.sarif"
+              is_compiled = lang in compiled_langs
 
               if not os.path.exists(arm) and not os.path.exists(x86):
                   report.append(f"| {lang} | — | — | SKIPPED (both missing) |")
                   continue
               if not os.path.exists(arm):
-                  report.append(f"| {lang} | — | — | ARM64 SARIF missing |")
-                  all_match = False
+                  if is_compiled:
+                      report.append(f"| {lang} | — | x86 only | EXPECTED (compiled, no ARM64 tracer) |")
+                  else:
+                      report.append(f"| {lang} | — | — | **UNEXPECTED**: ARM64 SARIF missing |")
+                      has_real_diff = True
                   continue
               if not os.path.exists(x86):
-                  report.append(f"| {lang} | — | — | x86_64 SARIF missing |")
-                  all_match = False
+                  report.append(f"| {lang} | — | — | **UNEXPECTED**: x86_64 SARIF missing |")
+                  has_real_diff = True
                   continue
 
               arm_r = normalize_results(arm)
@@ -231,9 +237,9 @@ jobs:
               else:
                   only_arm = arm_set - x86_set
                   only_x86 = x86_set - arm_set
-                  detail = f"DIFF (+{len(only_arm)} ARM64-only, +{len(only_x86)} x86-only)"
+                  detail = f"**DIFF** (+{len(only_arm)} ARM64-only, +{len(only_x86)} x86-only)"
                   report.append(f"| {lang} | {len(arm_r)} | {len(x86_r)} | {detail} |")
-                  all_match = False
+                  has_real_diff = True
                   if only_arm:
                       print(f"\n{lang} — only in ARM64 (first 3):")
                       for item in list(only_arm)[:3]:
@@ -252,13 +258,16 @@ jobs:
               for line in report:
                   f.write(line + "\n")
               f.write("\n")
+              if not has_real_diff:
+                  f.write("> All interpreted language SARIFs match between ARM64 and x86_64.\n")
+                  f.write("> Compiled languages are expected to fail on ARM64 (x86_64 tracer cannot inject into ARM64 builds).\n\n")
 
-          if not all_match:
-              print("\nWARNING: Some SARIF outputs differ between architectures.")
-              print("This may be expected for compiled languages where tracing differs.")
-              # Do not fail — differences are informational
+          if has_real_diff:
+              print("\nERROR: Unexpected SARIF differences found for interpreted languages!")
+              sys.exit(1)
           else:
-              print("\nAll SARIF outputs match between ARM64 and x86_64.")
+              print("\nAll interpreted language SARIF outputs match between ARM64 and x86_64.")
+              print("Compiled language ARM64 failures are expected (x86_64 tracer limitation).")
           PYEOF
 
   # ───────────────────────────────────────────────────────────────────
@@ -372,14 +381,24 @@ jobs:
               f.write("\n### Summary\n\n")
 
               # Count successes/failures
-              success = sum(1 for d in data if d.get("create_ms", -1) > 0)
-              total = len(data)
-              f.write(f"- **{success}/{total}** scan jobs completed successfully\n")
+              arm_data = [d for d in data if d["arch"] == "arm64"]
+              x86_data = [d for d in data if d["arch"] == "x86_64"]
+              arm_ok = sum(1 for d in arm_data if d.get("create_ms", -1) > 0)
+              x86_ok = sum(1 for d in x86_data if d.get("create_ms", -1) > 0)
+              f.write(f"- **ARM64**: {arm_ok}/{len(arm_data)} languages succeeded\n")
+              f.write(f"- **x86_64**: {x86_ok}/{len(x86_data)} languages succeeded\n")
 
-              langs_tested = set(d["language"] for d in data if d.get("create_ms", -1) > 0)
-              f.write(f"- **Languages tested**: {', '.join(sorted(langs_tested))}\n")
+              langs_arm = sorted(d["language"] for d in arm_data if d.get("create_ms", -1) > 0)
+              langs_x86 = sorted(d["language"] for d in x86_data if d.get("create_ms", -1) > 0)
+              f.write(f"- **ARM64 languages**: {', '.join(langs_arm) or 'none'}\n")
+              f.write(f"- **x86_64 languages**: {', '.join(langs_x86) or 'none'}\n")
               f.write(f"- **Architectures**: ARM64 (ubuntu-24.04-arm), x86_64 (ubuntu-latest)\n")
-              f.write(f"- **CodeQL version**: downloaded at runtime (latest or pinned)\n")
+              f.write(f"- **CodeQL version**: downloaded at runtime (latest or pinned)\n\n")
+
+              f.write("### Known Limitations\n\n")
+              f.write("Compiled languages (Java, Go, C++) fail on ARM64 because the CodeQL\n")
+              f.write("preload_tracer (x86_64 binary) cannot inject into ARM64 build processes.\n")
+              f.write("Interpreted languages (Python, JavaScript, Ruby) work fully on both architectures.\n")
 
           print("Performance report written to GITHUB_STEP_SUMMARY")
           PYEOF
