@@ -2,14 +2,59 @@ name: Test CodeQL ARM64 Action
 
 on:
   push:
-    branches: [v1, initial-release]
+    branches: [initial-release]
   pull_request:
-    branches: [v1]
+    branches: [v1, master]
   workflow_dispatch:
 
 permissions: {}
 
 jobs:
+  commitlint:
+    name: Commitlint
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v6
+      - uses: wagoid/commitlint-github-action@v6
+
+  version-bump:
+    name: Version bump check
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Validate VERSION bump
+        shell: bash
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if [ ! -f VERSION ]; then
+            echo "::error::VERSION file is missing"
+            exit 1
+          fi
+
+          if ! grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' VERSION; then
+            echo "::error::VERSION must be strict semver (e.g. 1.2.3)"
+            exit 1
+          fi
+
+          git fetch --no-tags origin "$BASE_REF":"refs/remotes/origin/$BASE_REF"
+
+          if git diff --quiet "refs/remotes/origin/$BASE_REF"...HEAD -- VERSION; then
+            echo "::error::VERSION must be bumped in pull requests"
+            exit 1
+          fi
+
+          echo "VERSION bump detected: $(cat VERSION)"
+
   # ───────────────────────────────────────────────────────────────────
   # Compatibility matrix — real-world projects, ARM64 vs x86_64
   # ───────────────────────────────────────────────────────────────────
