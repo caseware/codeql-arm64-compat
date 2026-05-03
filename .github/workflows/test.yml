@@ -83,6 +83,17 @@ jobs:
         with:
           path: .codeql-arm64-action
 
+      - name: Setup CodeQL CLI (x86_64)
+        if: runner.arch != 'ARM64'
+        shell: bash
+        run: |
+          VERSION=$(curl -sI "https://github.com/github/codeql-cli-binaries/releases/latest" \
+            | grep -i ^location | sed 's|.*/tag/||' | tr -d '\r\n')
+          curl -sL "https://github.com/github/codeql-cli-binaries/releases/download/${VERSION}/codeql-linux64.zip" \
+            -o /tmp/codeql.zip
+          unzip -qo /tmp/codeql.zip -d "$HOME"
+          echo "$HOME/codeql" >> "$GITHUB_PATH"
+
       - name: Setup CodeQL (ARM64 compat)
         id: setup
         uses: ./.codeql-arm64-action
