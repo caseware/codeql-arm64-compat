@@ -78,9 +78,25 @@ jobs:
           repository: ${{ matrix.language.project }}
           ref: ${{ matrix.language.ref }}
 
+      - name: Checkout action
+        uses: actions/checkout@v6
+        with:
+          path: .codeql-arm64-action
+
+      - name: Setup CodeQL CLI (x86_64)
+        if: runner.arch != 'ARM64'
+        shell: bash
+        run: |
+          VERSION=$(curl -sI "https://github.com/github/codeql-cli-binaries/releases/latest" \
+            | grep -i ^location | sed 's|.*/tag/||' | tr -d '\r\n')
+          curl -sL "https://github.com/github/codeql-cli-binaries/releases/download/${VERSION}/codeql-linux64.zip" \
+            -o /tmp/codeql.zip
+          unzip -qo /tmp/codeql.zip -d "$HOME"
+          echo "$HOME/codeql" >> "$GITHUB_PATH"
+
       - name: Setup CodeQL (ARM64 compat)
         id: setup
-        uses: caseware/codeql-arm64-compat@v1
+        uses: ./.codeql-arm64-action
         with:
           enable-compiled-languages: "${{ matrix.language.compiled }}"
 
@@ -407,7 +423,7 @@ jobs:
 
       - name: Run action (populates or restores cache)
         id: setup
-        uses: caseware/codeql-arm64-compat@v1
+        uses: ./
         with:
           enable-compiled-languages: "true"
 
@@ -442,9 +458,14 @@ jobs:
           repository: DaveGamble/cJSON
           ref: "v1.7.18"
 
+      - name: Checkout action
+        uses: actions/checkout@v6
+        with:
+          path: .codeql-arm64-action
+
       - name: Setup CodeQL (ARM64 compat)
         id: setup
-        uses: caseware/codeql-arm64-compat@v1
+        uses: ./.codeql-arm64-action
         with:
           enable-compiled-languages: "true"
 
