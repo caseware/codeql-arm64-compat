@@ -10,17 +10,17 @@
  * clear diagnostic instead of a cryptic crash.
  *
  * Build (on ARM64 runner):
- *   gcc -static -O2 -o preload_tracer src/stub-tracer.c
+ *   musl-gcc -static -O2 -s -o preload_tracer src/stub-tracer.c
  *
  * SPDX-License-Identifier: MIT
  *
  * Binary published as a GitHub Release asset by release-stub-tracer.yml.
  */
 
-#include <stdio.h>
+#include <unistd.h>
 
-int main(int argc, char *argv[]) {
-    fprintf(stderr,
+int main(void) {
+    const char message[] =
         "\n"
         "================================================================\n"
         " codeql-arm64-compat: build tracing is NOT supported on ARM64\n"
@@ -36,6 +36,7 @@ int main(int argc, char *argv[]) {
         " Go is NOT supported (no --build-mode=none; autobuild needs this tracer).\n"
         "\n"
         "================================================================\n"
-        "\n");
+        "\n";
+    (void)write(STDERR_FILENO, message, sizeof(message) - 1);
     return 1;
 }
