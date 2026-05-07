@@ -17,11 +17,10 @@
  * Binary published as a GitHub Release asset by release-stub-tracer.yml.
  */
 
-#include <string.h>
 #include <unistd.h>
 
 int main(void) {
-    static const char message[] =
+    const char message[] =
         "\n"
         "================================================================\n"
         " codeql-arm64-compat: build tracing is NOT supported on ARM64\n"
@@ -38,6 +37,6 @@ int main(void) {
         "\n"
         "================================================================\n"
         "\n";
-    (void)write(STDERR_FILENO, message, strlen(message));
+    (void)write(STDERR_FILENO, message, sizeof(message) - 1);
     return 1;
 }
