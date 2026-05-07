@@ -14,7 +14,7 @@
  *
  * SPDX-License-Identifier: MIT
  *
- * Binary published as a GitHub Release asset by release-stub-tracer.yml.
+ * Binary published as a GitHub Release asset by publish-marketplace.yml.
  */
 
 #include <unistd.h>
