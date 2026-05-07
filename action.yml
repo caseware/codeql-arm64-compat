@@ -1,5 +1,5 @@
 name: 'Setup CodeQL on ARM64'
-description: 'Patches CodeQL to run on ARM64 Linux via QEMU user-mode emulation for native x86_64 binaries and an ARM64 JDK for the evaluation engine.'
+description: 'Patches CodeQL for ARM64 Linux using QEMU for x86_64 binaries and an ARM64 JDK evaluation engine.'
 author: 'Community'
 
 branding:
