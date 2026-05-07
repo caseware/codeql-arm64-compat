@@ -28,8 +28,8 @@ jobs:
       matrix:
         include:
           - language: c-cpp
-            build-mode: manual
-            enable-compiled: "true"
+            build-mode: none
+            enable-compiled: "false"
           - language: actions
             build-mode: none
             enable-compiled: "false"
@@ -46,11 +46,6 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
-
-      - name: Build stub-tracer.c
-        if: matrix.language == 'c-cpp'
-        run: |
-          gcc -static -O2 -o preload_tracer-arm64 src/stub-tracer.c
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v4

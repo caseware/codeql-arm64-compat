@@ -61,8 +61,8 @@ Every PR must include a `VERSION` bump — the `version-bump` CI job enforces th
 
 `.github/workflows/codeql.yml` scans this repo using this action itself on
 `ubuntu-24.04-arm`. It covers:
-- `c-cpp` — `src/stub-tracer.c`, built with `gcc -static -O2`, using `./` to
-  bootstrap CodeQL via the action under development
+- `c-cpp` — `src/stub-tracer.c`, scanned with `build-mode: none` (buildless)
+  to avoid unsupported traced-build mode on ARM64
 - `actions` — workflow YAML files, `build-mode: none`
 
 Results are uploaded to GitHub Security (SARIF). Do not remove or disable
