@@ -1,0 +1,57 @@
+name: CodeQL (self-scan)
+
+on:
+  push:
+    branches: [master, v1]
+  pull_request:
+    branches: [master, v1]
+  schedule:
+    # Weekly on Monday at 08:00 UTC
+    - cron: '0 8 * * 1'
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    # Dogfood: run on ARM64 using this very action to patch CodeQL
+    runs-on: ubuntu-24.04-arm
+    env:
+      # Work around ARM64 baseline calculation crashes in codeql-action init.
+      # Keep dogfooding via init/analyze, but force database init to skip baseline.
+      CODEQL_ACTION_EXTRA_OPTIONS: '{"database":{"init":["--no-calculate-baseline"]}}'
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: c-cpp
+            build-mode: none
+            enable-compiled: "true"
+          - language: actions
+            build-mode: none
+            enable-compiled: "false"
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup CodeQL (ARM64 compat) — dogfooding this action
+        uses: ./
+        with:
+          enable-compiled-languages: ${{ matrix.enable-compiled }}
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:${{ matrix.language }}"
