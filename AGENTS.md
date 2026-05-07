@@ -62,7 +62,9 @@ Every PR must include a `VERSION` bump — the `version-bump` CI job enforces th
 `.github/workflows/codeql.yml` scans this repo using this action itself on
 `ubuntu-24.04-arm`. It covers:
 - `c-cpp` — `src/stub-tracer.c`, scanned with `build-mode: none` (buildless)
-  via `github/codeql-action` (`init`/`analyze`) to dogfood the real flow
+  via `github/codeql-action` (`init`/`analyze`) to dogfood the real flow.
+  Keep `enable-compiled-languages: true` for this lane so x86_64 linker/glibc
+  are present if upstream action/CLI code paths still touch traced/autobuild.
 - `actions` — workflow YAML files, `build-mode: none`
 
 The workflow sets `CODEQL_ACTION_EXTRA_OPTIONS` to pass

@@ -33,7 +33,7 @@ jobs:
         include:
           - language: c-cpp
             build-mode: none
-            enable-compiled: "false"
+            enable-compiled: "true"
           - language: actions
             build-mode: none
             enable-compiled: "false"
