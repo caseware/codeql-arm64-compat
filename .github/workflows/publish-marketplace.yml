@@ -11,12 +11,37 @@ permissions:
   contents: write
 
 jobs:
+  build-stub-tracer:
+    name: Build ARM64 stub tracer
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Build static ARM64 binary
+        run: |
+          gcc -static -O2 -o preload_tracer-arm64 src/stub-tracer.c
+          strip preload_tracer-arm64
+          file preload_tracer-arm64
+          sha256sum preload_tracer-arm64
+
+      - name: Upload stub tracer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: preload_tracer-arm64
+          path: preload_tracer-arm64
+
   publish:
+    needs: build-stub-tracer
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+
+      - name: Download stub tracer artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: preload_tracer-arm64
 
       - name: Validate VERSION and derive tag
         id: version
@@ -97,6 +122,7 @@ jobs:
           TAG: ${{ steps.version.outputs.tag }}
         run: |
           gh release create "$TAG" \
+            preload_tracer-arm64 \
             --title "$TAG" \
             --notes "${{ steps.changelog.outputs.changes }}"
 
@@ -108,5 +134,6 @@ jobs:
           NOTES: ${{ steps.fallback.outputs.notes }}
         run: |
           gh release create "$TAG" \
+            preload_tracer-arm64 \
             --title "$TAG" \
             --notes "$NOTES"
