@@ -24,6 +24,15 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: wagoid/commitlint-github-action@b948419dd99f3fd78a6548d48f94e3df7f6bf3ed
+      - name: Validate PR title with commitlint
+        shell: bash
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          printf '%s\n' "$PR_TITLE" | npx --yes \
+            -p @commitlint/cli@19.8.1 \
+            -p @commitlint/config-conventional@19.8.1 \
+            commitlint --extends @commitlint/config-conventional
 
   version-bump:
     name: Version bump check
