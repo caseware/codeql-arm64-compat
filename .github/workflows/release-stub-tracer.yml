@@ -16,10 +16,14 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Install musl toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
       - name: Build static ARM64 binary
         run: |
-          gcc -static -O2 -o preload_tracer-arm64 src/stub-tracer.c
-          strip preload_tracer-arm64
+          musl-gcc -static -O2 -s -o preload_tracer-arm64 src/stub-tracer.c
           file preload_tracer-arm64
           sha256sum preload_tracer-arm64
 
