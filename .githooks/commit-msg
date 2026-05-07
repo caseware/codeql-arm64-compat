@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Validates the commit message follows Conventional Commits.
+# Activated via: git config core.hooksPath .githooks
+
+MSG_FILE="$1"
+MSG=$(cat "$MSG_FILE")
+
+# Ignore merge commits and fixup/squash commits
+FIRST_LINE=$(head -1 "$MSG_FILE")
+if echo "$FIRST_LINE" | grep -qE '^(Merge|Revert|fixup!|squash!)'; then
+  exit 0
+fi
+
+# Pattern: type(optional scope)!?: subject (non-empty)
+# Types from @commitlint/config-conventional
+PATTERN='^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(\([^)]+\))?!?: .+'
+
+if ! echo "$FIRST_LINE" | grep -qE "$PATTERN"; then
+  echo ""
+  echo "  ✖  Commit message does not follow Conventional Commits format."
+  echo ""
+  echo "  Expected: <type>(<scope>): <subject>"
+  echo "  Example:  feat: add ARM64 support for Ruby"
+  echo "  Example:  fix(action): handle missing VERSION file"
+  echo ""
+  echo "  Types: build chore ci docs feat fix perf refactor revert style test"
+  echo "  Subject must not be empty."
+  echo ""
+  echo "  Your message: $FIRST_LINE"
+  echo ""
+  exit 1
+fi
+
+# Check body line lengths (max 100 chars), skip trailers
+IN_BODY=false
+LINE_NUM=0
+while IFS= read -r line; do
+  LINE_NUM=$((LINE_NUM + 1))
+  [ $LINE_NUM -le 1 ] && continue
+  [ -z "$line" ] && IN_BODY=true && continue
+  # Skip git trailers (Co-authored-by, Signed-off-by, etc.)
+  if echo "$line" | grep -qE '^[A-Za-z-]+: '; then continue; fi
+  if [ ${#line} -gt 100 ]; then
+    echo ""
+    echo "  ✖  Body line $LINE_NUM exceeds 100 characters (${#line} chars):"
+    echo "     $line"
+    echo ""
+    exit 1
+  fi
+done < "$MSG_FILE"
+
+exit 0

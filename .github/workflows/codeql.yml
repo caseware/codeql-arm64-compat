@@ -1,0 +1,53 @@
+name: CodeQL (self-scan)
+
+on:
+  push:
+    branches: [master, v1]
+  pull_request:
+    branches: [master, v1]
+  schedule:
+    # Weekly on Monday at 08:00 UTC
+    - cron: '0 8 * * 1'
+
+permissions: {}
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    # Dogfood: run on ARM64 using this very action to patch CodeQL
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: c-cpp
+            build-mode: manual
+          - language: actions
+            build-mode: none
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup CodeQL (ARM64 compat) — dogfooding this action
+        if: matrix.language == 'c-cpp'
+        uses: ./
+        with:
+          enable-compiled-languages: "true"
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      - name: Build stub-tracer.c
+        if: matrix.language == 'c-cpp'
+        run: |
+          gcc -static -O2 -o preload_tracer-arm64 src/stub-tracer.c
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
