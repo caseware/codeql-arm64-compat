@@ -3,7 +3,6 @@
 # Activated via: git config core.hooksPath .githooks
 
 MSG_FILE="$1"
-MSG=$(cat "$MSG_FILE")
 
 # Ignore merge commits and fixup/squash commits
 FIRST_LINE=$(head -1 "$MSG_FILE")
@@ -32,14 +31,13 @@ if ! echo "$FIRST_LINE" | grep -qE "$PATTERN"; then
 fi
 
 # Check body line lengths (max 100 chars), skip trailers
-IN_BODY=false
 LINE_NUM=0
 while IFS= read -r line; do
   LINE_NUM=$((LINE_NUM + 1))
   [ $LINE_NUM -le 1 ] && continue
-  [ -z "$line" ] && IN_BODY=true && continue
+  [ -z "$line" ] && continue
   # Skip git trailers (Co-authored-by, Signed-off-by, etc.)
-  if echo "$line" | grep -qE '^[A-Za-z-]+: '; then continue; fi
+  if echo "$line" | grep -qE '^(Co-authored-by|Signed-off-by|Acked-by|Reviewed-by|Tested-by|Reported-by|Suggested-by|Fixes|Refs): '; then continue; fi
   if [ ${#line} -gt 100 ]; then
     echo ""
     echo "  ✖  Body line $LINE_NUM exceeds 100 characters (${#line} chars):"

@@ -17,7 +17,7 @@ jobs:
   commitlint:
     name: Commitlint
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     permissions:
       contents: read
       pull-requests: read
@@ -28,7 +28,7 @@ jobs:
   version-bump:
     name: Version bump check
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     permissions:
       contents: read
     steps:
