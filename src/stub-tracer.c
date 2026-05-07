@@ -10,11 +10,11 @@
  * clear diagnostic instead of a cryptic crash.
  *
  * Build (on ARM64 runner):
- *   gcc -static -O2 -o preload_tracer src/stub-tracer.c
+ *   musl-gcc -static -O2 -s -o preload_tracer src/stub-tracer.c
  *
  * SPDX-License-Identifier: MIT
  *
- * Binary published as a GitHub Release asset by release-stub-tracer.yml.
+ * Binary published as a GitHub Release asset by publish-marketplace.yml.
  */
 
 #include <stdio.h>
