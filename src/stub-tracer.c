@@ -18,6 +18,8 @@
  */
 
 #include <unistd.h>
+#include <errno.h>
+#include <stddef.h>
 
 int main(void) {
     const char message[] =
@@ -37,6 +39,21 @@ int main(void) {
         "\n"
         "================================================================\n"
         "\n";
-    (void)write(STDERR_FILENO, message, sizeof(message) - 1);
+    const char *p = message;
+    size_t remaining = sizeof(message) - 1;
+
+    while (remaining > 0) {
+        ssize_t written = write(STDERR_FILENO, p, remaining);
+        if (written > 0) {
+            p += (size_t)written;
+            remaining -= (size_t)written;
+            continue;
+        }
+        if (written < 0 && errno == EINTR) {
+            continue;
+        }
+        break;
+    }
+
     return 1;
 }
