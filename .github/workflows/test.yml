@@ -37,21 +37,20 @@ jobs:
 
           cat > /tmp/commitlint.config.mjs << 'EOF'
           export default {
+            extends: ['@commitlint/config-conventional'],
             rules: {
-              'type-empty': [2, 'never'],
-              'subject-empty': [2, 'never'],
               'body-max-line-length': [2, 'always', 100],
             },
           };
           EOF
 
-          npx --yes @commitlint/cli@19.8.1 \
+          npx --yes -p @commitlint/cli@19.8.1 -p @commitlint/config-conventional@19.8.1 commitlint \
             --config /tmp/commitlint.config.mjs \
             --from "refs/remotes/origin/$BASE_REF" \
             --to "$HEAD_SHA"
 
           printf '%s\n' "$PR_TITLE" \
-            | npx --yes @commitlint/cli@19.8.1 --config /tmp/commitlint.config.mjs
+            | npx --yes -p @commitlint/cli@19.8.1 -p @commitlint/config-conventional@19.8.1 commitlint --config /tmp/commitlint.config.mjs
 
   version-bump:
     name: Version bump check
