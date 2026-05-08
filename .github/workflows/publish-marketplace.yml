@@ -107,7 +107,43 @@ jobs:
         env:
           TAG: ${{ steps.version.outputs.tag }}
         run: |
-          PREVIOUS_TAG=$(git --no-pager tag --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | grep -vx "$TAG" | head -1 || true)
+          CURRENT="${TAG#v}"
+
+          # Select the greatest semver tag strictly lower than CURRENT.
+          PREVIOUS_RAW=$(git --no-pager tag \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+            | sed 's/^v//' \
+            | awk -v cur="$CURRENT" '
+              function vercmp(a,b,  i,A,B,n1,n2) {
+                split(a, A, "."); split(b, B, ".");
+                for (i = 1; i <= 3; i++) {
+                  n1 = A[i] + 0; n2 = B[i] + 0;
+                  if (n1 < n2) return -1;
+                  if (n1 > n2) return 1;
+                }
+                return 0;
+              }
+              { if (vercmp($0, cur) < 0) print $0 }
+            ' \
+            | sort -V \
+            | tail -1 || true)
+
+          if [ -n "$PREVIOUS_RAW" ]; then
+            PREVIOUS_TAG="v$PREVIOUS_RAW"
+          else
+            PREVIOUS_TAG=""
+          fi
+
+          # If there are existing tags but none lower than CURRENT, this is a regression
+          # (e.g. trying to release 1.0.0 after 1.0.1 exists).
+          ANY_TAGS=$(git --no-pager tag | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true)
+          if [ -n "$ANY_TAGS" ] && [ -z "$PREVIOUS_TAG" ]; then
+            echo "::error::VERSION v$CURRENT is not greater than existing release tags."
+            echo "Existing tags:"
+            echo "$ANY_TAGS"
+            exit 1
+          fi
+
           echo "previous_tag=$PREVIOUS_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Generate changelog from conventional commits
