@@ -2,156 +2,720 @@ name: Test CodeQL ARM64 Action
 
 on:
   push:
-    branches: [v1, initial-release]
+    branches: [v1]
   pull_request:
     branches: [v1]
   workflow_dispatch:
 
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test-arm64-interpreted:
-    name: ARM64 — Interpreted language (Python)
+  version-bump:
+    name: Version bump check
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: caseware/codeql-arm64-compat@v1
-        id: codeql-setup
-
-      - name: Create test project
-        run: |
-          mkdir -p /tmp/test-project
-          cat > /tmp/test-project/app.py << 'EOF'
-          import os
-          import subprocess
-
-          def run_command(user_input):
-              # Intentional vulnerability for CodeQL to find
-              subprocess.call(user_input, shell=True)
-
-          def read_file(filename):
-              with open(filename) as f:
-                  return f.read()
-          EOF
-
-      - name: Create database
-        run: |
-          codeql database create /tmp/test-db \
-            --language=python \
-            --source-root=/tmp/test-project
-
-      - name: Run analysis
-        run: |
-          codeql pack download codeql/python-queries
-          codeql database analyze /tmp/test-db codeql/python-queries \
-            --format=sarif-latest \
-            --output=/tmp/results.sarif
-
-      - name: Verify results
-        run: |
-          echo "SARIF file size: $(wc -c < /tmp/results.sarif) bytes"
-          python3 -c "
-          import json
-          with open('/tmp/results.sarif') as f:
-              sarif = json.load(f)
-          runs = sarif['runs']
-          print(f'Analysis runs: {len(runs)}')
-          for run in runs:
-              results = run.get('results', [])
-              print(f'Results found: {len(results)}')
-          "
-
-  test-arm64-compiled:
-    name: ARM64 — Compiled language support (rootfs extraction)
-    runs-on: ubuntu-24.04-arm
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: caseware/codeql-arm64-compat@v1
-        id: codeql-setup
+      - uses: actions/checkout@v6
         with:
-          enable-compiled-languages: 'true'
-
-      - name: Verify QEMU_LD_PREFIX is set
+          fetch-depth: 0
+      - name: Validate VERSION bump
+        shell: bash
+        env:
+          BASE_REF: ${{ github.base_ref }}
         run: |
-          echo "QEMU_LD_PREFIX=$QEMU_LD_PREFIX"
-          test -n "$QEMU_LD_PREFIX"
-          echo "Rootfs contents:"
-          ls -la "$QEMU_LD_PREFIX/" | head -20
-          ls -la "$QEMU_LD_PREFIX/lib64/" 2>/dev/null || ls -la "$QEMU_LD_PREFIX/lib/" 2>/dev/null || true
-          # The dynamic linker could be at lib64/ or lib/x86_64-linux-gnu/
-          LD_PATH=$(find "$QEMU_LD_PREFIX" -name "ld-linux-x86-64.so*" -type f -o -name "ld-linux-x86-64.so*" -type l 2>/dev/null | head -1)
-          test -n "$LD_PATH"
-          echo "Dynamic linker found at: $LD_PATH"
-
-      - name: Verify x86_64 binary execution via QEMU
-        run: |
-          CODEQL_DIR=$(which codeql | xargs dirname)
-          echo "CodeQL dir: $CODEQL_DIR"
-          file "$CODEQL_DIR/tools/linux64/runner" || true
-          # runner is x86_64 dynamically-linked — should work with QEMU_LD_PREFIX
-          "$CODEQL_DIR/tools/linux64/runner" --help 2>&1 | head -5 || echo "runner invocation attempted"
-
-  test-arm64-javascript:
-    name: ARM64 — JavaScript analysis
-    runs-on: ubuntu-24.04-arm
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: caseware/codeql-arm64-compat@v1
-
-      - name: Create test project
-        run: |
-          mkdir -p /tmp/js-project
-          cat > /tmp/js-project/index.js << 'EOF'
-          const http = require('http');
-          const { exec } = require('child_process');
-
-          const server = http.createServer((req, res) => {
-            // Intentional command injection for CodeQL to detect
-            exec(req.url, (err, stdout) => {
-              res.end(stdout);
-            });
-          });
-
-          server.listen(3000);
-          EOF
-
-      - name: Create database
-        run: |
-          codeql database create /tmp/js-db \
-            --language=javascript \
-            --source-root=/tmp/js-project
-
-      - name: Run analysis
-        run: |
-          codeql pack download codeql/javascript-queries
-          codeql database analyze /tmp/js-db codeql/javascript-queries \
-            --format=sarif-latest \
-            --output=/tmp/js-results.sarif
-
-      - name: Verify results
-        run: |
-          echo "SARIF file size: $(wc -c < /tmp/js-results.sarif) bytes"
-          python3 -c "
-          import json
-          with open('/tmp/js-results.sarif') as f:
-              sarif = json.load(f)
-          for run in sarif['runs']:
-              print(f'Results: {len(run.get(\"results\", []))}')
-          "
-
-  test-x86_64-passthrough:
-    name: x86_64 — Pass-through (no-op)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: caseware/codeql-arm64-compat@v1
-        id: codeql-setup
-
-      - name: Verify no patching occurred
-        run: |
-          echo "Architecture: $(uname -m)"
-          if [ "$(uname -m)" = "x86_64" ]; then
-            echo "Correctly detected as non-ARM64 — action was a no-op"
+          if [ ! -f VERSION ]; then
+            echo "::error::VERSION file is missing"
+            exit 1
           fi
+
+          if ! grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' VERSION; then
+            echo "::error::VERSION must be strict semver (e.g. 1.2.3)"
+            exit 1
+          fi
+
+          git fetch --no-tags origin "$BASE_REF":"refs/remotes/origin/$BASE_REF"
+
+          if git diff --quiet "refs/remotes/origin/$BASE_REF"...HEAD -- VERSION; then
+            echo "::error::VERSION must be bumped in pull requests"
+            exit 1
+          fi
+
+          echo "VERSION bump detected: $(cat VERSION)"
+
+  # ───────────────────────────────────────────────────────────────────
+  # Compatibility matrix — real-world projects, ARM64 vs x86_64
+  # ───────────────────────────────────────────────────────────────────
+  scan:
+    name: "${{ matrix.language.name }} — ${{ matrix.arch.name }}"
+    runs-on: ${{ matrix.arch.runner }}
+    permissions:
+      contents: read
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        language:
+          # --- Interpreted languages (same analysis mode on both archs) ---
+          - name: python
+            project: pallets/flask
+            ref: "3.1.1"
+            compiled: false
+            build-cmd: ""
+            arm64-build-mode: ""
+          - name: javascript
+            project: expressjs/express
+            ref: "4.21.2"
+            compiled: false
+            build-cmd: ""
+            arm64-build-mode: ""
+          - name: ruby
+            project: rack/rack
+            ref: "v3.1.12"
+            compiled: true
+            build-cmd: ""
+            arm64-build-mode: ""
+          # --- Compiled languages (buildless on ARM64, traced on x86_64) ---
+          - name: java
+            project: google/gson
+            ref: "gson-parent-2.12.1"
+            compiled: true
+            build-cmd: ""
+            arm64-build-mode: "none"
+          # Go excluded: autobuild wraps with preload_tracer (no ARM64 support),
+          # and Go doesn't support --build-mode=none. See README for details.
+          - name: cpp
+            project: DaveGamble/cJSON
+            ref: "v1.7.18"
+            compiled: true
+            build-cmd: "mkdir build && cd build && cmake .. && make"
+            arm64-build-mode: "none"
+          - name: rust
+            project: BurntSushi/ripgrep
+            ref: "14.1.1"
+            compiled: true
+            build-cmd: ""
+            arm64-build-mode: "none"
+        arch:
+          - name: arm64
+            runner: ubuntu-24.04-arm
+          - name: x86_64
+            runner: ubuntu-latest
+    # Buildless mode on ARM64 may produce different findings than traced x86_64.
+    # Interpreted languages and x86_64 jobs must always pass.
+    continue-on-error: ${{ matrix.arch.name == 'arm64' && matrix.language.arm64-build-mode == 'none' }}
+    steps:
+      - name: Checkout test project
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ matrix.language.project }}
+          ref: ${{ matrix.language.ref }}
+
+      - name: Checkout action
+        uses: actions/checkout@v6
+        with:
+          path: .codeql-arm64-action
+
+      - name: Setup CodeQL CLI (x86_64)
+        if: runner.arch != 'ARM64'
+        shell: bash
+        run: |
+          VERSION=$(curl -sI "https://github.com/github/codeql-cli-binaries/releases/latest" \
+            | grep -i ^location | sed 's|.*/tag/||' | tr -d '\r\n')
+          curl -sL "https://github.com/github/codeql-cli-binaries/releases/download/${VERSION}/codeql-linux64.zip" \
+            -o /tmp/codeql.zip
+          unzip -qo /tmp/codeql.zip -d "$HOME"
+          echo "$HOME/codeql" >> "$GITHUB_PATH"
+
+      - name: Setup CodeQL (ARM64 compat)
+        id: setup
+        uses: ./.codeql-arm64-action
+        with:
+          enable-compiled-languages: "${{ matrix.language.compiled }}"
+
+      - name: Create CodeQL database
+        id: create-db
+        shell: bash
+        env:
+          ARM64_MODE: ${{ matrix.language.arm64-build-mode }}
+          BUILD_CMD: ${{ matrix.language.build-cmd }}
+          LANG_NAME: ${{ matrix.language.name }}
+        run: |
+          START_NS=$(date +%s%N)
+
+          ARCH=$(uname -m)
+
+          if [ "$ARCH" = "aarch64" ] && [ -n "$ARM64_MODE" ]; then
+            # ARM64 buildless mode — analyse source without a build step
+            echo "Using --build-mode=$ARM64_MODE on ARM64"
+            codeql database create codeql-db \
+              --language="$LANG_NAME" \
+              --source-root=. \
+              --build-mode="$ARM64_MODE" \
+              --overwrite 2>&1 | tail -30
+          elif [ -n "$BUILD_CMD" ]; then
+            # Traced mode with explicit build command
+            echo '#!/usr/bin/env bash' > .codeql-build.sh
+            echo "$BUILD_CMD" >> .codeql-build.sh
+            chmod +x .codeql-build.sh
+            codeql database create codeql-db \
+              --language="$LANG_NAME" \
+              --source-root=. \
+              --command=./.codeql-build.sh \
+              --overwrite 2>&1 | tail -30
+          else
+            # Default: autobuild (interpreted langs + x86_64 compiled)
+            codeql database create codeql-db \
+              --language="$LANG_NAME" \
+              --source-root=. \
+              --overwrite 2>&1 | tail -30
+          fi
+
+          END_NS=$(date +%s%N)
+          echo "duration_ms=$(( (END_NS - START_NS) / 1000000 ))" >> "$GITHUB_OUTPUT"
+
+      - name: Run CodeQL analysis
+        id: analyze
+        shell: bash
+        env:
+          LANG_NAME: ${{ matrix.language.name }}
+        run: |
+          START_NS=$(date +%s%N)
+
+          codeql database analyze codeql-db \
+            "codeql/${LANG_NAME}-queries" \
+            --format=sarif-latest \
+            --output=results.sarif \
+            --download 2>&1 | tail -20
+
+          END_NS=$(date +%s%N)
+          echo "duration_ms=$(( (END_NS - START_NS) / 1000000 ))" >> "$GITHUB_OUTPUT"
+
+          RESULT_COUNT=$(python3 -c "
+          import json
+          d = json.load(open('results.sarif'))
+          print(sum(len(r.get('results',[])) for r in d.get('runs',[])))
+          ")
+          echo "result_count=$RESULT_COUNT" >> "$GITHUB_OUTPUT"
+
+      - name: Upload SARIF
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: sarif-${{ matrix.language.name }}-${{ matrix.arch.name }}
+          path: results.sarif
+          if-no-files-found: ignore
+          retention-days: 5
+
+      - name: Save timing data
+        if: always()
+        shell: bash
+        env:
+          ARM64_MODE: ${{ matrix.language.arm64-build-mode }}
+          LANG_NAME: ${{ matrix.language.name }}
+          ARCH_NAME: ${{ matrix.arch.name }}
+          PROJECT_NAME: ${{ matrix.language.project }}
+          REF_NAME: ${{ matrix.language.ref }}
+          CREATE_MS: ${{ steps.create-db.outputs.duration_ms || -1 }}
+          ANALYZE_MS: ${{ steps.analyze.outputs.duration_ms || -1 }}
+          RESULT_COUNT: ${{ steps.analyze.outputs.result_count || -1 }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          ARCH=$(uname -m)
+          if [ "$ARCH" = "aarch64" ] && [ -n "$ARM64_MODE" ]; then
+            BUILD_MODE="$ARM64_MODE"
+          else
+            BUILD_MODE="autobuild"
+          fi
+          cat > timing.json << ENDJSON
+          {
+            "language": "$LANG_NAME",
+            "arch": "$ARCH_NAME",
+            "project": "$PROJECT_NAME",
+            "ref": "$REF_NAME",
+            "build_mode": "$BUILD_MODE",
+            "create_ms": $CREATE_MS,
+            "analyze_ms": $ANALYZE_MS,
+            "result_count": $RESULT_COUNT,
+            "status": "$JOB_STATUS"
+          }
+          ENDJSON
+
+      - name: Upload timing data
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: timing-${{ matrix.language.name }}-${{ matrix.arch.name }}
+          path: timing.json
+          retention-days: 5
+
+  # ───────────────────────────────────────────────────────────────────
+  # SARIF consistency — ARM64 results must match x86_64
+  # ───────────────────────────────────────────────────────────────────
+  sarif-check:
+    name: SARIF consistency check
+    needs: scan
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    steps:
+      - name: Download all SARIF artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: sarif-*
+          path: sarifs
+
+      - name: Compare ARM64 vs x86_64 SARIF outputs
+        shell: bash
+        run: |
+          python3 << 'PYEOF'
+          import json, sys, os, glob
+
+          def normalize_results(path):
+              """Extract deterministic fields from SARIF results."""
+              with open(path) as f:
+                  data = json.load(f)
+              results = []
+              for run in data.get("runs", []):
+                  for r in run.get("results", []):
+                      locs = []
+                      for loc in r.get("locations", []):
+                          pl = loc.get("physicalLocation", {})
+                          al = pl.get("artifactLocation", {})
+                          region = pl.get("region", {})
+                          locs.append({
+                              "uri": al.get("uri", ""),
+                              "startLine": region.get("startLine"),
+                              "startColumn": region.get("startColumn"),
+                          })
+                      results.append({
+                          "ruleId": r.get("ruleId"),
+                          "level": r.get("level", "warning"),
+                          "message": r.get("message", {}).get("text", ""),
+                          "locations": locs,
+                      })
+              return sorted(results, key=lambda x: json.dumps(x, sort_keys=True))
+
+          # Languages that use --build-mode=none on ARM64 (buildless).
+          # Buildless may produce different results or fail entirely.
+          buildless_on_arm64 = {"java", "cpp", "rust"}
+          languages = ["python", "javascript", "ruby", "java", "cpp", "rust"]
+          report = []
+          has_real_diff = False
+
+          for lang in languages:
+              arm = f"sarifs/sarif-{lang}-arm64/results.sarif"
+              x86 = f"sarifs/sarif-{lang}-x86_64/results.sarif"
+              is_buildless = lang in buildless_on_arm64
+
+              if not os.path.exists(arm) and not os.path.exists(x86):
+                  report.append(f"| {lang} | — | — | SKIPPED (both missing) |")
+                  continue
+              if not os.path.exists(arm):
+                  if is_buildless:
+                      report.append(f"| {lang} | — | x86 only | EXPECTED (buildless failed on ARM64) |")
+                  else:
+                      report.append(f"| {lang} | — | — | **UNEXPECTED**: ARM64 SARIF missing |")
+                      has_real_diff = True
+                  continue
+              if not os.path.exists(x86):
+                  report.append(f"| {lang} | — | — | **UNEXPECTED**: x86_64 SARIF missing |")
+                  has_real_diff = True
+                  continue
+
+              arm_r = normalize_results(arm)
+              x86_r = normalize_results(x86)
+
+              arm_set = set(json.dumps(r, sort_keys=True) for r in arm_r)
+              x86_set = set(json.dumps(r, sort_keys=True) for r in x86_r)
+
+              if arm_r == x86_r:
+                  report.append(f"| {lang} | {len(arm_r)} | {len(x86_r)} | MATCH |")
+              elif is_buildless:
+                  only_arm = arm_set - x86_set
+                  only_x86 = x86_set - arm_set
+                  detail = f"EXPECTED DIFF — buildless vs traced (+{len(only_arm)}/-{len(only_x86)})"
+                  report.append(f"| {lang} | {len(arm_r)} | {len(x86_r)} | {detail} |")
+                  print(f"\n{lang}: buildless ARM64 ({len(arm_r)} findings) vs traced x86_64 ({len(x86_r)} findings)")
+              else:
+                  only_arm = arm_set - x86_set
+                  only_x86 = x86_set - arm_set
+                  detail = f"**DIFF** (+{len(only_arm)} ARM64-only, +{len(only_x86)} x86-only)"
+                  report.append(f"| {lang} | {len(arm_r)} | {len(x86_r)} | {detail} |")
+                  has_real_diff = True
+                  if only_arm:
+                      print(f"\n{lang} — only in ARM64 (first 3):")
+                      for item in list(only_arm)[:3]:
+                          print(f"  {item[:200]}")
+                  if only_x86:
+                      print(f"\n{lang} — only in x86_64 (first 3):")
+                      for item in list(only_x86)[:3]:
+                          print(f"  {item[:200]}")
+
+          # Write to step summary
+          summary = os.environ.get("GITHUB_STEP_SUMMARY", "/dev/null")
+          with open(summary, "a") as f:
+              f.write("## SARIF Consistency Check\n\n")
+              f.write("| Language | ARM64 findings | x86_64 findings | Status |\n")
+              f.write("|----------|:-:|:-:|--------|\n")
+              for line in report:
+                  f.write(line + "\n")
+              f.write("\n")
+              if not has_real_diff:
+                  f.write("> Interpreted languages: identical SARIFs on ARM64 and x86_64.\n")
+                  f.write("> Compiled languages: ARM64 uses buildless mode (`--build-mode=none`), ")
+                  f.write("which may produce different results than traced analysis on x86_64.\n\n")
+
+          if has_real_diff:
+              print("\nERROR: Unexpected SARIF differences found for interpreted languages!")
+              sys.exit(1)
+          else:
+              print("\nAll interpreted language SARIF outputs match between ARM64 and x86_64.")
+              print("Compiled language differences are expected (buildless vs traced).")
+          PYEOF
+
+  # ───────────────────────────────────────────────────────────────────
+  # CodeQL version matrix — validates across multiple releases
+  # ───────────────────────────────────────────────────────────────────
+  version-matrix:
+    name: "CodeQL ${{ matrix.codeql-version }} (ARM64)"
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - codeql-version: "latest"
+            query-pack: "codeql/python-queries"
+          - codeql-version: "v2.25.2"
+            query-pack: "codeql/python-queries"
+          - codeql-version: "v2.20.0"
+            query-pack: "codeql/python-queries@~1.2.0"
+    steps:
+      - name: Checkout test project
+        uses: actions/checkout@v6
+        with:
+          repository: pallets/flask
+          ref: "3.1.1"
+
+      - name: Checkout action
+        uses: actions/checkout@v6
+        with:
+          path: .codeql-arm64-action
+
+      - name: Setup CodeQL (ARM64 compat)
+        id: setup
+        uses: ./.codeql-arm64-action
+        with:
+          codeql-version: ${{ matrix.codeql-version }}
+
+      - name: Create CodeQL database
+        run: |
+          codeql database create codeql-db \
+            --language=python \
+            --source-root=. \
+            --overwrite 2>&1 | tail -20
+
+      - name: Run CodeQL analysis
+        shell: bash
+        env:
+          QUERY_PACK: ${{ matrix.query-pack }}
+        run: |
+          codeql database analyze codeql-db \
+            --format=sarif-latest \
+            --output=results.sarif \
+            --download \
+            "$QUERY_PACK" 2>&1 | tail -10
+
+      - name: Report results
+        shell: bash
+        env:
+          CODEQL_VER: ${{ matrix.codeql-version }}
+        run: |
+          FINDINGS=$(python3 -c "import json; d=json.load(open('results.sarif')); print(sum(len(r.get('results',[])) for r in d.get('runs',[])))")
+          echo "## CodeQL $CODEQL_VER" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Metric | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|--------|-------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Version | $(codeql --version 2>&1 | head -1) |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Architecture | $(uname -m) |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Findings | $FINDINGS |" >> "$GITHUB_STEP_SUMMARY"
+
+  # ───────────────────────────────────────────────────────────────────
+  # Cache validation — separate from the matrix
+  # ───────────────────────────────────────────────────────────────────
+  cache-validation:
+    name: Cache validation (ARM64)
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Run action (populates or restores cache)
+        id: setup
+        uses: ./
+        with:
+          enable-compiled-languages: "true"
+
+      - name: Report cache status
+        shell: bash
+        env:
+          SETUP_VERSION: ${{ steps.setup.outputs.codeql-version }}
+          SETUP_PATH: ${{ steps.setup.outputs.codeql-path }}
+        run: |
+          echo "## Cache Validation" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Component | Status |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-----------|--------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| CodeQL CLI | $SETUP_VERSION |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| CodeQL path | $SETUP_PATH |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Architecture | $(uname -m) |" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          codeql --version
+
+  # ───────────────────────────────────────────────────────────────────
+  # Stub tracer validation — traced build on ARM64 must fail gracefully
+  # ───────────────────────────────────────────────────────────────────
+  stub-tracer:
+    name: Stub tracer (ARM64)
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout a C project for traced build
+        uses: actions/checkout@v6
+        with:
+          repository: DaveGamble/cJSON
+          ref: "v1.7.18"
+
+      - name: Checkout action
+        uses: actions/checkout@v6
+        with:
+          path: .codeql-arm64-action
+
+      - name: Setup CodeQL (ARM64 compat)
+        id: setup
+        uses: ./.codeql-arm64-action
+        with:
+          enable-compiled-languages: "true"
+
+      - name: Attempt traced build (must fail with stub message, not SIGSEGV)
+        shell: bash
+        run: |
+          echo "## Stub Tracer Validation" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          # Run codeql database create in traced mode (no --build-mode=none).
+          # The stub tracer should cause this to fail with exit 1 and a
+          # diagnostic message, NOT a SIGSEGV (exit 139).
+          set +e
+          OUTPUT=$(codeql database create codeql-db \
+            --language=cpp \
+            --source-root=. \
+            --command="mkdir -p build && cd build && cmake .. && make" \
+            --overwrite 2>&1)
+          EXIT_CODE=$?
+          set -e
+
+          echo "| Check | Result |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-------|--------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Exit code | $EXIT_CODE |" >> "$GITHUB_STEP_SUMMARY"
+
+          # Must NOT be SIGSEGV (139) — that means stub wasn't replaced
+          if [ "$EXIT_CODE" -eq 139 ]; then
+            echo "| SIGSEGV | FAIL — stub was not replaced |" >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::preload_tracer crashed with SIGSEGV (139). Stub replacement failed."
+            exit 1
+          fi
+
+          # Must contain the stub's diagnostic message
+          if echo "$OUTPUT" | grep -q "build tracing is NOT supported on ARM64"; then
+            echo "| Stub message | Found |" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "| Stub message | NOT found |" >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::Stub diagnostic message not found in output"
+            echo "$OUTPUT" | tail -20
+            exit 1
+          fi
+
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Traced build failed gracefully via stub tracer (not SIGSEGV)." >> "$GITHUB_STEP_SUMMARY"
+
+  # ───────────────────────────────────────────────────────────────────
+  # Performance report — aggregates timing across all scan jobs
+  # ───────────────────────────────────────────────────────────────────
+  report:
+    name: Performance report
+    needs: [scan, sarif-check, cache-validation, version-matrix, stub-tracer]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    steps:
+      - name: Download timing data
+        uses: actions/download-artifact@v8
+        with:
+          pattern: timing-*
+          path: timings
+
+      - name: Generate performance report
+        shell: bash
+        run: |
+          python3 << 'PYEOF'
+          import json, os, glob
+
+          summary = os.environ.get("GITHUB_STEP_SUMMARY", "/dev/null")
+          files = sorted(glob.glob("timings/*/timing.json"))
+
+          # Parse all timing data
+          data = []
+          for f in files:
+              with open(f) as fh:
+                  data.append(json.load(fh))
+
+          # Group by language
+          languages = {}
+          for d in data:
+              lang = d["language"]
+              if lang not in languages:
+                  languages[lang] = {}
+              languages[lang][d["arch"]] = d
+
+          with open(summary, "a") as f:
+              f.write("## CodeQL ARM64 Compatibility Report\n\n")
+              f.write("### Performance Comparison (ARM64 vs x86_64)\n\n")
+              f.write("| Language | Project | Mode | Metric | ARM64 | x86_64 | Delta |\n")
+              f.write("|----------|---------|------|--------|------:|-------:|------:|\n")
+
+              for lang in sorted(languages.keys()):
+                  archs = languages[lang]
+                  arm = archs.get("arm64", {})
+                  x86 = archs.get("x86_64", {})
+                  project = arm.get("project") or x86.get("project", "?")
+                  arm_mode = arm.get("build_mode", "autobuild")
+                  x86_mode = x86.get("build_mode", "autobuild")
+                  mode_col = f"{arm_mode} / {x86_mode}" if arm_mode != x86_mode else arm_mode
+
+                  # DB create
+                  arm_c = arm.get("create_ms", -1)
+                  x86_c = x86.get("create_ms", -1)
+                  if arm_c > 0 and x86_c > 0:
+                      delta_c = f"{(arm_c - x86_c) / 1000:+.1f}s"
+                  else:
+                      delta_c = "—"
+                  arm_c_s = f"{arm_c/1000:.1f}s" if arm_c > 0 else "FAIL"
+                  x86_c_s = f"{x86_c/1000:.1f}s" if x86_c > 0 else "FAIL"
+                  f.write(f"| {lang} | {project} | {mode_col} | DB create | {arm_c_s} | {x86_c_s} | {delta_c} |\n")
+
+                  # Analysis
+                  arm_a = arm.get("analyze_ms", -1)
+                  x86_a = x86.get("analyze_ms", -1)
+                  if arm_a > 0 and x86_a > 0:
+                      delta_a = f"{(arm_a - x86_a) / 1000:+.1f}s"
+                  else:
+                      delta_a = "—"
+                  arm_a_s = f"{arm_a/1000:.1f}s" if arm_a > 0 else "FAIL"
+                  x86_a_s = f"{x86_a/1000:.1f}s" if x86_a > 0 else "FAIL"
+                  f.write(f"| | | | Analysis | {arm_a_s} | {x86_a_s} | {delta_a} |\n")
+
+                  # Findings
+                  arm_n = arm.get("result_count", -1)
+                  x86_n = x86.get("result_count", -1)
+                  arm_n_s = str(arm_n) if arm_n >= 0 else "—"
+                  x86_n_s = str(x86_n) if x86_n >= 0 else "—"
+                  match = "MATCH" if arm_n == x86_n and arm_n >= 0 else ("—" if arm_n < 0 or x86_n < 0 else "DIFF")
+                  f.write(f"| | | | Findings | {arm_n_s} | {x86_n_s} | {match} |\n")
+
+              f.write("\n### Summary\n\n")
+
+              arm_data = [d for d in data if d["arch"] == "arm64"]
+              x86_data = [d for d in data if d["arch"] == "x86_64"]
+              arm_ok = sum(1 for d in arm_data if d.get("create_ms", -1) > 0)
+              x86_ok = sum(1 for d in x86_data if d.get("create_ms", -1) > 0)
+              f.write(f"- **ARM64**: {arm_ok}/{len(arm_data)} languages succeeded\n")
+              f.write(f"- **x86_64**: {x86_ok}/{len(x86_data)} languages succeeded\n")
+
+              # Categorise by build mode
+              arm_buildless = [d for d in arm_data if d.get("build_mode") == "none"]
+              arm_auto = [d for d in arm_data if d.get("build_mode") != "none"]
+              bl_ok = sum(1 for d in arm_buildless if d.get("create_ms", -1) > 0)
+              auto_ok = sum(1 for d in arm_auto if d.get("create_ms", -1) > 0)
+              if arm_buildless:
+                  bl_langs = sorted(d["language"] for d in arm_buildless if d.get("create_ms", -1) > 0)
+                  bl_fail = sorted(d["language"] for d in arm_buildless if d.get("create_ms", -1) <= 0)
+                  f.write(f"- **ARM64 buildless** (`--build-mode=none`): {bl_ok}/{len(arm_buildless)}")
+                  if bl_langs: f.write(f" — passed: {', '.join(bl_langs)}")
+                  if bl_fail: f.write(f" — failed: {', '.join(bl_fail)}")
+                  f.write("\n")
+              if arm_auto:
+                  auto_langs = sorted(d["language"] for d in arm_auto if d.get("create_ms", -1) > 0)
+                  f.write(f"- **ARM64 autobuild**: {auto_ok}/{len(arm_auto)} — {', '.join(auto_langs) or 'none'}\n")
+
+              f.write(f"- **Architectures**: ARM64 (ubuntu-24.04-arm), x86_64 (ubuntu-latest)\n")
+              f.write(f"- **CodeQL version**: downloaded at runtime (latest or pinned)\n\n")
+
+              f.write("### Known Limitations\n\n")
+              f.write("| Limitation | Affected languages | Workaround |\n")
+              f.write("|------------|-------------------|------------|\n")
+              f.write("| Build tracing (`preload_tracer`) not supported on ARM64 | All compiled | Use `--build-mode=none` (buildless) |\n")
+              f.write("| Go unsupported on ARM64 | Go | No `--build-mode=none`; autobuild requires preload_tracer |\n")
+              f.write("| Buildless analysis has reduced depth | All compiled | Some data-flow findings may be missed |\n")
+              f.write("| Rust support is experimental in CodeQL | Rust | May fail on some projects |\n")
+
+          print("Performance report written to GITHUB_STEP_SUMMARY")
+          PYEOF
+
+      - name: Gate check
+        if: always()
+        shell: bash
+        env:
+          SCAN: ${{ needs.scan.result }}
+          SARIF: ${{ needs.sarif-check.result }}
+          CACHE: ${{ needs.cache-validation.result }}
+          VERSIONS: ${{ needs.version-matrix.result }}
+          STUB: ${{ needs.stub-tracer.result }}
+        run: |
+          echo "Checking upstream job results..."
+
+          echo "  scan:             $SCAN"
+          echo "  sarif-check:      $SARIF"
+          echo "  cache-validation: $CACHE"
+          echo "  version-matrix:   $VERSIONS"
+          echo "  stub-tracer:      $STUB"
+
+          FAILED=0
+          # scan uses continue-on-error for buildless jobs, so 'failure' is acceptable
+          if [[ "$SARIF" == "failure" ]]; then
+            echo "::error::SARIF consistency check failed"
+            FAILED=1
+          fi
+          if [[ "$CACHE" == "failure" ]]; then
+            echo "::error::Cache validation failed"
+            FAILED=1
+          fi
+          if [[ "$VERSIONS" == "failure" ]]; then
+            echo "::error::CodeQL version matrix failed"
+            FAILED=1
+          fi
+          if [[ "$STUB" == "failure" ]]; then
+            echo "::error::Stub tracer validation failed"
+            FAILED=1
+          fi
+          if [[ "$SCAN" == "failure" ]]; then
+            echo "::warning::Some scan jobs failed (may include expected buildless failures)"
+          fi
+
+          if [[ "$FAILED" -eq 1 ]]; then
+            echo ""
+            echo "::error::Gate check FAILED — see errors above"
+            exit 1
+          fi
+          echo "Gate check passed"
