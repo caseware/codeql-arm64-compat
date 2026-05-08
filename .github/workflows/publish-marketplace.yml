@@ -2,13 +2,12 @@ name: Publish this Action to the GitHub Marketplace
 
 on:
   push:
-    branches: [master]
+    branches: [v1]
     paths:
       - VERSION
   workflow_dispatch:
 
-permissions:
-  contents: write
+permissions: {}
 
 # Serialize releases; never cancel an in-progress publish (could leave a half-tagged state).
 concurrency:
@@ -19,6 +18,8 @@ jobs:
   build-stub-tracer:
     name: Build ARM64 stub tracer
     runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v6
 
@@ -42,6 +43,8 @@ jobs:
   publish:
     needs: build-stub-tracer
     runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v6
         with:
@@ -177,6 +180,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
+          CHANGELOG_NOTES: ${{ steps.changelog.outputs.changes }}
         run: |
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Release $TAG already exists; ensuring asset is present"
@@ -187,7 +191,7 @@ jobs:
           gh release create "$TAG" \
             preload_tracer-arm64 \
             --title "$TAG" \
-            --notes "${{ steps.changelog.outputs.changes }}"
+            --notes "$CHANGELOG_NOTES"
 
       - name: Create GitHub release for first version
         if: steps.previous.outputs.previous_tag == ''

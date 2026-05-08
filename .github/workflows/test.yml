@@ -2,9 +2,9 @@ name: Test CodeQL ARM64 Action
 
 on:
   push:
-    branches: [initial-release]
+    branches: [v1]
   pull_request:
-    branches: [v1, master]
+    branches: [v1]
   workflow_dispatch:
 
 permissions: {}
