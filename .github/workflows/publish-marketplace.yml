@@ -1,0 +1,214 @@
+name: Publish this Action to the GitHub Marketplace
+
+on:
+  push:
+    branches: [v1]
+    paths:
+      - VERSION
+  workflow_dispatch:
+
+permissions: {}
+
+# Serialize releases; never cancel an in-progress publish (could leave a half-tagged state).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-stub-tracer:
+    name: Build ARM64 stub tracer
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install musl toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
+      - name: Build static ARM64 binary
+        run: |
+          musl-gcc -static -O2 -s -o preload_tracer-arm64 src/stub-tracer.c
+          file preload_tracer-arm64
+          sha256sum preload_tracer-arm64
+
+      - name: Upload stub tracer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: preload_tracer-arm64
+          path: preload_tracer-arm64
+
+  publish:
+    needs: build-stub-tracer
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Download stub tracer artifact
+        uses: actions/download-artifact@v4.1.3
+        with:
+          name: preload_tracer-arm64
+
+      - name: Validate VERSION and derive tag
+        id: version
+        shell: bash
+        run: |
+          if [ ! -f VERSION ]; then
+            echo "::error::VERSION file is missing"
+            exit 1
+          fi
+
+          VERSION=$(tr -d '[:space:]' < VERSION)
+          if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::VERSION must be strict semver (e.g. 1.2.3)"
+            exit 1
+          fi
+
+          TAG="v$VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure tag is immutable (rerun-safe)
+        id: tag-check
+        shell: bash
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          EXISTING_SHA=$(git ls-remote --tags origin "refs/tags/$TAG" | awk '{print $1}' || true)
+          if [ -z "$EXISTING_SHA" ]; then
+            echo "tag_exists=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "$EXISTING_SHA" = "$GITHUB_SHA" ]; then
+            echo "tag_exists=true" >> "$GITHUB_OUTPUT"
+            echo "Tag $TAG already points to current SHA ($GITHUB_SHA); continuing."
+            exit 0
+          fi
+
+          echo "::error::Tag $TAG already exists on origin and points to $EXISTING_SHA (current SHA: $GITHUB_SHA)."
+          exit 1
+
+      - name: Create and push tag
+        if: steps.tag-check.outputs.tag_exists != 'true'
+        shell: bash
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          git tag "$TAG" "$GITHUB_SHA"
+          git push origin "refs/tags/$TAG"
+
+      - name: Detect previous version tag
+        id: previous
+        shell: bash
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          CURRENT="${TAG#v}"
+
+          # Select the greatest semver tag strictly lower than CURRENT.
+          PREVIOUS_RAW=$(git --no-pager tag \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+            | sed 's/^v//' \
+            | awk -v cur="$CURRENT" '
+              function vercmp(a,b,  i,A,B,n1,n2) {
+                split(a, A, "."); split(b, B, ".");
+                for (i = 1; i <= 3; i++) {
+                  n1 = A[i] + 0; n2 = B[i] + 0;
+                  if (n1 < n2) return -1;
+                  if (n1 > n2) return 1;
+                }
+                return 0;
+              }
+              { if (vercmp($0, cur) < 0) print $0 }
+            ' \
+            | sort -V \
+            | tail -1 || true)
+
+          if [ -n "$PREVIOUS_RAW" ]; then
+            PREVIOUS_TAG="v$PREVIOUS_RAW"
+          else
+            PREVIOUS_TAG=""
+          fi
+
+          # If there are existing tags other than the current tag, but none lower than
+          # CURRENT, this is a regression (e.g. trying to release 1.0.0 after 1.0.1 exists).
+          ANY_TAGS=$(git --no-pager tag \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+            | grep -vx "$TAG" || true)
+          if [ -n "$ANY_TAGS" ] && [ -z "$PREVIOUS_TAG" ]; then
+            echo "::error::VERSION v$CURRENT is not greater than existing release tags."
+            echo "Existing tags:"
+            echo "$ANY_TAGS"
+            exit 1
+          fi
+
+          echo "previous_tag=$PREVIOUS_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Generate changelog from conventional commits
+        if: steps.previous.outputs.previous_tag != ''
+        id: changelog
+        uses: requarks/changelog-action@51292dd6c2f9952581598c7e42a63836587aaa54
+        with:
+          token: ${{ github.token }}
+          fromTag: ${{ steps.previous.outputs.previous_tag }}
+          toTag: ${{ steps.version.outputs.tag }}
+          writeToFile: false
+
+      - name: Fallback changelog for first release
+        if: steps.previous.outputs.previous_tag == ''
+        id: fallback
+        shell: bash
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          {
+            echo 'notes<<EOF'
+            echo "Initial release $TAG"
+            echo
+            echo "Recent commits:"
+            git --no-pager log --pretty='- %s (%h)' -20
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub release with generated changelog
+        if: steps.previous.outputs.previous_tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          CHANGELOG_NOTES: ${{ steps.changelog.outputs.changes }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; ensuring asset is present"
+            gh release upload "$TAG" preload_tracer-arm64 --clobber
+            exit 0
+          fi
+
+          gh release create "$TAG" \
+            preload_tracer-arm64 \
+            --title "$TAG" \
+            --notes "$CHANGELOG_NOTES"
+
+      - name: Create GitHub release for first version
+        if: steps.previous.outputs.previous_tag == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          NOTES: ${{ steps.fallback.outputs.notes }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; ensuring asset is present"
+            gh release upload "$TAG" preload_tracer-arm64 --clobber
+            exit 0
+          fi
+
+          gh release create "$TAG" \
+            preload_tracer-arm64 \
+            --title "$TAG" \
+            --notes "$NOTES"

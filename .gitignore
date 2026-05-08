@@ -1,0 +1,2 @@
+# Pre-built binaries are release assets, not tracked in git
+bin/
