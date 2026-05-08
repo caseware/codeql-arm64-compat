@@ -33,7 +33,10 @@ jobs:
         run: |
           git fetch --no-tags origin "$BASE_REF":"refs/remotes/origin/$BASE_REF"
 
-          cat > /tmp/commitlint.config.mjs << 'EOF'
+          npm init -y >/dev/null 2>&1 || true
+          npm install --no-save @commitlint/cli@19.8.1 @commitlint/config-conventional@19.8.1
+
+          cat > ./commitlint.ci.config.mjs << 'EOF'
           export default {
             extends: ['@commitlint/config-conventional'],
             rules: {
@@ -42,11 +45,10 @@ jobs:
           };
           EOF
 
-          npx --yes -p @commitlint/cli@19.8.1 -p @commitlint/config-conventional@19.8.1 commitlint \
-            --config /tmp/commitlint.config.mjs \
+          npx commitlint \
+            --config ./commitlint.ci.config.mjs \
             --from "refs/remotes/origin/$BASE_REF" \
             --to "$HEAD_SHA"
 
           printf '%s\n' "$PR_TITLE" \
-            | npx --yes -p @commitlint/cli@19.8.1 -p @commitlint/config-conventional@19.8.1 commitlint \
-              --config /tmp/commitlint.config.mjs
+            | npx commitlint --config ./commitlint.ci.config.mjs
