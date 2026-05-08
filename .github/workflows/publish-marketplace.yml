@@ -137,9 +137,11 @@ jobs:
             PREVIOUS_TAG=""
           fi
 
-          # If there are existing tags but none lower than CURRENT, this is a regression
-          # (e.g. trying to release 1.0.0 after 1.0.1 exists).
-          ANY_TAGS=$(git --no-pager tag | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true)
+          # If there are existing tags other than the current tag, but none lower than
+          # CURRENT, this is a regression (e.g. trying to release 1.0.0 after 1.0.1 exists).
+          ANY_TAGS=$(git --no-pager tag \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+            | grep -vx "$TAG" || true)
           if [ -n "$ANY_TAGS" ] && [ -z "$PREVIOUS_TAG" ]; then
             echo "::error::VERSION v$CURRENT is not greater than existing release tags."
             echo "Existing tags:"
