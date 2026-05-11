@@ -345,7 +345,14 @@ runs:
         if [ -z "$REPO" ]; then
           REPO="$CURRENT_REPO"
         fi
-        TAG=$(gh release list --repo "$REPO" --json tagName -q '.[].tagName' | grep '^stub-tracer-' | head -1)
+        TAG=$(gh release list --repo "$REPO" --json tagName -q '.[].tagName' | grep -E '^v[0-9]' | sort -V | tail -1 || true)
+        if [ -n "$TAG" ]; then
+          HAS_ASSET=$(gh release view "$TAG" --repo "$REPO" --json assets -q '.assets[].name' | grep -x 'preload_tracer-arm64' || true)
+          if [ -z "$HAS_ASSET" ]; then
+            echo "::notice::Release $TAG does not contain preload_tracer-arm64 asset"
+            TAG=""
+          fi
+        fi
         printf 'tag=%s\n' "${TAG:-none}" >> "$GITHUB_OUTPUT"
         printf 'repo=%s\n' "$REPO" >> "$GITHUB_OUTPUT"
 
