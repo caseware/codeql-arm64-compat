@@ -409,7 +409,7 @@ runs:
           EXPECTS_ATTESTATION=true
         fi
 
-        VERIFY_OUTPUT=$(gh attestation verify "$STUB_PATH" --repo "$REPO" 2>&1) && RC=0 || RC=$?
+        VERIFY_OUTPUT=$(gh attestation verify "$STUB_PATH" --repo "$REPO" --owner caseware 2>&1) && RC=0 || RC=$?
 
         if [ "$RC" -eq 0 ]; then
           echo "provenance=verified" >> "$GITHUB_OUTPUT"
