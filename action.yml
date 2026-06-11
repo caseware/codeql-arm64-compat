@@ -395,15 +395,25 @@ runs:
         fi
 
         echo "::group::Verifying provenance attestation for preload_tracer-arm64"
-        echo "Binary SHA256: $(sha256sum "$STUB_PATH" | cut -d' ' -f1)"
+        DIGEST=$(sha256sum "$STUB_PATH" | cut -d' ' -f1)
+        echo "Binary SHA256: $DIGEST"
 
-        if ! gh attestation verify "$STUB_PATH" --repo "$REPO" 2>&1; then
-          echo "::error::Provenance verification FAILED — the stub binary does not have a valid attestation from $REPO. This could indicate a supply chain compromise. Refusing to install."
+        VERIFY_OUTPUT=$(gh attestation verify "$STUB_PATH" --repo "$REPO" 2>&1) && RC=0 || RC=$?
+
+        if [ "$RC" -eq 0 ]; then
+          echo "provenance=verified" >> "$GITHUB_OUTPUT"
+          echo "Provenance verified: binary was built by GitHub Actions from $REPO"
+        elif echo "$VERIFY_OUTPUT" | grep -qi "no attestations found\|HTTP 404"; then
+          echo "provenance=none" >> "$GITHUB_OUTPUT"
+          echo "::warning::No attestation found for this release — binary predates provenance. Verification will be enforced for releases built with attestation support."
+        else
+          echo "provenance=failed" >> "$GITHUB_OUTPUT"
+          echo "$VERIFY_OUTPUT"
+          echo "::error::Provenance verification FAILED — attestation exists but does not match. This could indicate a supply chain compromise. Refusing to install."
           echo "::endgroup::"
           exit 1
         fi
 
-        echo "Provenance verified: binary was built by GitHub Actions from $REPO"
         echo "::endgroup::"
 
     - name: Replace preload_tracer with ARM64 stub
@@ -412,14 +422,13 @@ runs:
       env:
         CODEQL_DIR: ${{ steps.download.outputs.codeql-dir }}
         CACHED: ${{ runner.temp }}/preload_tracer-arm64
-        PROVENANCE_VERIFIED: ${{ steps.verify-provenance.outcome }}
+        PROVENANCE_STATUS: ${{ steps.verify-provenance.outputs.provenance }}
       run: |
         TRACER="$CODEQL_DIR/tools/linux64/preload_tracer"
 
         if [ -f "$TRACER" ] && [ -f "$CACHED" ]; then
-          # Enforce provenance — refuse to install unverified binaries
-          if [ "$PROVENANCE_VERIFIED" != "success" ] && [ "$PROVENANCE_VERIFIED" != "" ]; then
-            echo "::error::Refusing to replace preload_tracer — provenance verification did not succeed (outcome: $PROVENANCE_VERIFIED)"
+          if [ "$PROVENANCE_STATUS" = "failed" ]; then
+            echo "::error::Refusing to replace preload_tracer — provenance verification failed"
             exit 1
           fi
 

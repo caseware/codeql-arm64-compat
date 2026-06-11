@@ -221,3 +221,11 @@ jobs:
             preload_tracer-arm64 \
             --title "$TAG" \
             --notes "$NOTES"
+
+      - name: Attest action source provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            action.yml
+            src/stub-tracer.c
+            patch-codeql.sh
