@@ -388,6 +388,7 @@ runs:
         GH_TOKEN: ${{ github.token }}
         REPO: ${{ steps.stub-tag.outputs.repo }}
         STUB_PATH: ${{ runner.temp }}/preload_tracer-arm64
+        RELEASE_TAG: ${{ steps.stub-tag.outputs.tag }}
       run: |
         if [ ! -f "$STUB_PATH" ]; then
           echo "::error::Stub binary not found at $STUB_PATH"
@@ -403,13 +404,17 @@ runs:
         if [ "$RC" -eq 0 ]; then
           echo "provenance=verified" >> "$GITHUB_OUTPUT"
           echo "Provenance verified: binary was built by GitHub Actions from $REPO"
-        elif echo "$VERIFY_OUTPUT" | grep -qi "no attestations found\|HTTP 404"; then
+        elif echo "$VERIFY_OUTPUT" | grep -qiE "no attestations found|HTTP 404"; then
+          # No attestation exists for this digest. This occurs for releases
+          # that predate attestation support. Once the re-attest-releases
+          # workflow has been run for all historical releases, this branch
+          # should be converted to a hard failure.
           echo "provenance=none" >> "$GITHUB_OUTPUT"
-          echo "::warning::No attestation found for this release — binary predates provenance. Verification will be enforced for releases built with attestation support."
+          echo "::warning::No attestation found for release $RELEASE_TAG. Run the re-attest-releases workflow to create attestations for historical releases."
         else
           echo "provenance=failed" >> "$GITHUB_OUTPUT"
           echo "$VERIFY_OUTPUT"
-          echo "::error::Provenance verification FAILED — attestation exists but does not match. This could indicate a supply chain compromise. Refusing to install."
+          echo "::error::Provenance verification FAILED for release $RELEASE_TAG (exit code $RC). The binary may have been tampered with. Refusing to install."
           echo "::endgroup::"
           exit 1
         fi
