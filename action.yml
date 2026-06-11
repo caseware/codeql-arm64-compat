@@ -388,6 +388,7 @@ runs:
         GH_TOKEN: ${{ github.token }}
         REPO: ${{ steps.stub-tag.outputs.repo }}
         STUB_PATH: ${{ runner.temp }}/preload_tracer-arm64
+        RELEASE_TAG: ${{ steps.stub-tag.outputs.tag }}
       run: |
         if [ ! -f "$STUB_PATH" ]; then
           echo "::error::Stub binary not found at $STUB_PATH"
@@ -398,20 +399,45 @@ runs:
         DIGEST=$(sha256sum "$STUB_PATH" | cut -d' ' -f1)
         echo "Binary SHA256: $DIGEST"
 
+        # Attestation was introduced in v1.3.0. Releases at or above this
+        # version MUST have a valid attestation; "not found" on these versions
+        # indicates tampering (the digest changed), not a pre-attestation build.
+        ATTESTATION_SINCE="1.3.0"
+        TAG_VER="${RELEASE_TAG#v}"
+        EXPECTS_ATTESTATION=false
+        if printf '%s\n%s\n' "$ATTESTATION_SINCE" "$TAG_VER" | sort -V -C; then
+          EXPECTS_ATTESTATION=true
+        fi
+
         VERIFY_OUTPUT=$(gh attestation verify "$STUB_PATH" --repo "$REPO" 2>&1) && RC=0 || RC=$?
 
         if [ "$RC" -eq 0 ]; then
           echo "provenance=verified" >> "$GITHUB_OUTPUT"
           echo "Provenance verified: binary was built by GitHub Actions from $REPO"
-        elif echo "$VERIFY_OUTPUT" | grep -qi "no attestations found\|HTTP 404"; then
-          echo "provenance=none" >> "$GITHUB_OUTPUT"
-          echo "::warning::No attestation found for this release — binary predates provenance. Verification will be enforced for releases built with attestation support."
-        else
-          echo "provenance=failed" >> "$GITHUB_OUTPUT"
-          echo "$VERIFY_OUTPUT"
-          echo "::error::Provenance verification FAILED — attestation exists but does not match. This could indicate a supply chain compromise. Refusing to install."
-          echo "::endgroup::"
-          exit 1
+        elif [ "$RC" -ne 0 ]; then
+          # Determine if this is a "no attestation" situation vs other failure.
+          # Use exit code and multiple message patterns to be resilient to gh CLI changes.
+          NO_ATTESTATION=false
+          if echo "$VERIFY_OUTPUT" | grep -qiE "no attestations found|no matching attestations|attestation not found|HTTP 404|not found"; then
+            NO_ATTESTATION=true
+          fi
+
+          if [ "$NO_ATTESTATION" = "true" ] && [ "$EXPECTS_ATTESTATION" = "false" ]; then
+            echo "provenance=none" >> "$GITHUB_OUTPUT"
+            echo "::warning::No attestation found — release $RELEASE_TAG predates provenance (introduced in v${ATTESTATION_SINCE})."
+          elif [ "$NO_ATTESTATION" = "true" ] && [ "$EXPECTS_ATTESTATION" = "true" ]; then
+            echo "provenance=failed" >> "$GITHUB_OUTPUT"
+            echo "$VERIFY_OUTPUT"
+            echo "::error::Provenance verification FAILED — release $RELEASE_TAG should have attestation but none found for this binary digest. The binary may have been tampered with after release."
+            echo "::endgroup::"
+            exit 1
+          else
+            echo "provenance=failed" >> "$GITHUB_OUTPUT"
+            echo "$VERIFY_OUTPUT"
+            echo "::error::Provenance verification FAILED — unexpected error from gh attestation verify (exit code $RC). Refusing to install unverified binary."
+            echo "::endgroup::"
+            exit 1
+          fi
         fi
 
         echo "::endgroup::"

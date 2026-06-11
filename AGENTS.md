@@ -90,8 +90,15 @@ this workflow; it validates that the action works end-to-end on the code it ship
 
 The `preload_tracer-arm64` stub binary has build-time Sigstore attestation
 (`actions/attest-build-provenance@v2`) and runtime enforcement (`gh attestation
-verify` in `action.yml`). Any change to the build or release pipeline must
-preserve both. Do not remove or weaken attestation steps.
+verify` in `action.yml`). Each release also includes:
+
+- **Commit signature chain** — the changelog records GPG/SSH signature status
+  for every commit in the release range.
+- **Signed changelog** — `CHANGELOG.md` is attested via Sigstore and attached
+  to the release as a verifiable artifact.
+
+Any change to the build or release pipeline must preserve all attestation steps
+and the commit signature verification. Do not remove or weaken these.
 
 ## What agents should not do
 

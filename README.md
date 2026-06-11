@@ -358,9 +358,11 @@ When a consumer workflow runs this action on an ARM64 runner, the action:
 4. If verification **fails** (attestation exists but doesn't match), the action
    errors with a clear diagnostic and refuses to install the binary
 
-Releases that predate attestation support emit a warning instead of failing,
-allowing graceful adoption. Once a release is built with attestation, tampering
-is detected and blocked.
+Releases before v1.3.0 predate attestation support and emit a warning instead
+of failing. Releases v1.3.0 and later **must** have a valid attestation — if
+`gh attestation verify` reports "no attestations found" for a post-attestation
+release, this indicates the binary digest has changed (possible tampering) and
+the action refuses to install it.
 
 ### Fork safety
 
@@ -374,12 +376,32 @@ access) or `workflow_dispatch` (also requires write access). There is no
 `pull_request_target` trigger. Forks cannot publish releases or create
 attestations in the upstream repo's name.
 
+### Commit signature chain
+
+Each release includes a verified commit signature chain in the changelog.
+The publish workflow inspects every commit between the previous release and
+the current tag, recording which commits have valid GPG/SSH signatures. This
+provides an auditable trail: every code change that contributed to the release
+can be traced to a verified identity.
+
+If any commit is unsigned, a warning is emitted in the workflow and noted in
+the changelog. The signature chain is included as part of the attested
+`CHANGELOG.md` artifact attached to the release.
+
+### Signed changelog
+
+The `CHANGELOG.md` is generated at release time and attested via
+`actions/attest-build-provenance@v2`. This binds the changelog contents to
+the specific GitHub Actions run that produced it, preventing post-release
+tampering with the release notes. The changelog file is attached to the
+GitHub Release as a downloadable asset.
+
 ### Independent verification
 
 Verify the stub binary:
 
 ```bash
-gh release download v1.2.0 --repo caseware/codeql-arm64-compat --pattern "preload_tracer-arm64"
+gh release download v1.3.0 --repo caseware/codeql-arm64-compat --pattern "preload_tracer-arm64"
 gh attestation verify preload_tracer-arm64 --repo caseware/codeql-arm64-compat
 ```
 
@@ -387,6 +409,13 @@ Verify the action source:
 
 ```bash
 gh attestation verify action.yml --repo caseware/codeql-arm64-compat
+```
+
+Verify the changelog:
+
+```bash
+gh release download v1.3.0 --repo caseware/codeql-arm64-compat --pattern "CHANGELOG.md"
+gh attestation verify CHANGELOG.md --repo caseware/codeql-arm64-compat
 ```
 
 ## Contributing
