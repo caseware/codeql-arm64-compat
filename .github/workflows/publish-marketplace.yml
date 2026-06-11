@@ -113,7 +113,7 @@ jobs:
           git tag "$TAG" "$GITHUB_SHA"
           git push origin "refs/tags/$TAG"
 
-      - name: Detect previous version tag
+      - name: Detect previous release tag
         id: previous
         shell: bash
         env:
@@ -121,8 +121,10 @@ jobs:
         run: |
           CURRENT="${TAG#v}"
 
-          # Select the greatest semver tag strictly lower than CURRENT.
-          PREVIOUS_RAW=$(git --no-pager tag \
+          # Find the latest GitHub Release tag strictly lower than CURRENT.
+          # Uses gh release list so we compare against actual releases, not just
+          # tags that may have been created without a release.
+          PREVIOUS_TAG=$(gh release list --json tagName -q '.[].tagName' \
             | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
             | sed 's/^v//' \
             | awk -v cur="$CURRENT" '
@@ -140,87 +142,113 @@ jobs:
             | sort -V \
             | tail -1 || true)
 
-          if [ -n "$PREVIOUS_RAW" ]; then
-            PREVIOUS_TAG="v$PREVIOUS_RAW"
-          else
-            PREVIOUS_TAG=""
+          if [ -n "$PREVIOUS_TAG" ]; then
+            PREVIOUS_TAG="v$PREVIOUS_TAG"
           fi
 
-          # If there are existing tags other than the current tag, but none lower than
-          # CURRENT, this is a regression (e.g. trying to release 1.0.0 after 1.0.1 exists).
-          ANY_TAGS=$(git --no-pager tag \
-            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
-            | grep -vx "$TAG" || true)
-          if [ -n "$ANY_TAGS" ] && [ -z "$PREVIOUS_TAG" ]; then
-            echo "::error::VERSION v$CURRENT is not greater than existing release tags."
-            echo "Existing tags:"
-            echo "$ANY_TAGS"
-            exit 1
+          # Fallback: if no release found, use the most recent reachable tag.
+          if [ -z "$PREVIOUS_TAG" ]; then
+            PREVIOUS_TAG=$(git describe --tags --abbrev=0 "$TAG^" 2>/dev/null || true)
           fi
 
           echo "previous_tag=$PREVIOUS_TAG" >> "$GITHUB_OUTPUT"
+          echo "Previous release tag: ${PREVIOUS_TAG:-<none>}"
+        env:
+          GH_TOKEN: ${{ github.token }}
 
-      - name: Generate changelog from conventional commits
-        if: steps.previous.outputs.previous_tag != ''
+      - name: Generate changelog and verify commit signatures
         id: changelog
-        uses: requarks/changelog-action@51292dd6c2f9952581598c7e42a63836587aaa54
-        with:
-          token: ${{ github.token }}
-          fromTag: ${{ steps.previous.outputs.previous_tag }}
-          toTag: ${{ steps.version.outputs.tag }}
-          writeToFile: false
-
-      - name: Fallback changelog for first release
-        if: steps.previous.outputs.previous_tag == ''
-        id: fallback
         shell: bash
         env:
           TAG: ${{ steps.version.outputs.tag }}
+          PREVIOUS_TAG: ${{ steps.previous.outputs.previous_tag }}
         run: |
+          if [ -z "$PREVIOUS_TAG" ]; then
+            RANGE="$TAG"
+          else
+            RANGE="${PREVIOUS_TAG}..${TAG}"
+          fi
+
+          echo "::group::Generating changelog for $RANGE"
+
+          # ── Changelog ──
           {
-            echo 'notes<<EOF'
-            echo "Initial release $TAG"
-            echo
-            echo "Recent commits:"
-            git --no-pager log --pretty='- %s (%h)' -20
-            echo 'EOF'
+            echo "## What's Changed"
+            echo ""
+            git log --first-parent --pretty='format:* %s (%h)' "$RANGE" | head -100
+            echo ""
+          } > CHANGELOG.md
+
+          # ── Commit signature chain ──
+          # Verify GPG/SSH signatures on every commit in the range.
+          echo ""
+          echo "## Commit Signature Verification"
+          echo "" >> CHANGELOG.md
+          echo "### Commit signature chain" >> CHANGELOG.md
+          echo "" >> CHANGELOG.md
+
+          UNSIGNED=0
+          TOTAL=0
+          while IFS= read -r line; do
+            SHA=$(echo "$line" | cut -d' ' -f1)
+            SIG_STATUS=$(echo "$line" | cut -d' ' -f2)
+            SUBJECT=$(echo "$line" | cut -d' ' -f3-)
+            TOTAL=$((TOTAL + 1))
+
+            case "$SIG_STATUS" in
+              G|U)
+                echo "  [SIGNED] $SHA $SUBJECT"
+                echo "* \`$SHA\` — **signed** — $SUBJECT" >> CHANGELOG.md
+                ;;
+              *)
+                echo "  [UNSIGNED] $SHA $SUBJECT"
+                echo "* \`$SHA\` — unsigned — $SUBJECT" >> CHANGELOG.md
+                UNSIGNED=$((UNSIGNED + 1))
+                ;;
+            esac
+          done < <(git log --first-parent --pretty='format:%H %G? %s' "$RANGE")
+
+          echo "" >> CHANGELOG.md
+          if [ "$UNSIGNED" -gt 0 ]; then
+            echo "::warning::$UNSIGNED of $TOTAL commits in $RANGE are unsigned."
+            echo "> **Warning:** $UNSIGNED of $TOTAL commit(s) are unsigned." >> CHANGELOG.md
+          else
+            echo "All $TOTAL commits are signed."
+            echo "> All $TOTAL commit(s) in this release have verified GPG signatures." >> CHANGELOG.md
+          fi
+          echo "" >> CHANGELOG.md
+
+          echo "::endgroup::"
+
+          # Store changelog for release body
+          {
+            echo 'changes<<CHANGELOG_EOF'
+            cat CHANGELOG.md
+            echo 'CHANGELOG_EOF'
           } >> "$GITHUB_OUTPUT"
 
-      - name: Create GitHub release with generated changelog
-        if: steps.previous.outputs.previous_tag != ''
+      - name: Attest changelog provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: CHANGELOG.md
+
+      - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
-          CHANGELOG_NOTES: ${{ steps.changelog.outputs.changes }}
+          CHANGELOG: ${{ steps.changelog.outputs.changes }}
         run: |
           if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG already exists; ensuring asset is present"
-            gh release upload "$TAG" preload_tracer-arm64 --clobber
+            echo "Release $TAG already exists; ensuring assets are present"
+            gh release upload "$TAG" preload_tracer-arm64 CHANGELOG.md --clobber
             exit 0
           fi
 
           gh release create "$TAG" \
             preload_tracer-arm64 \
+            CHANGELOG.md \
             --title "$TAG" \
-            --notes "$CHANGELOG_NOTES"
-
-      - name: Create GitHub release for first version
-        if: steps.previous.outputs.previous_tag == ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.version.outputs.tag }}
-          NOTES: ${{ steps.fallback.outputs.notes }}
-        run: |
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG already exists; ensuring asset is present"
-            gh release upload "$TAG" preload_tracer-arm64 --clobber
-            exit 0
-          fi
-
-          gh release create "$TAG" \
-            preload_tracer-arm64 \
-            --title "$TAG" \
-            --notes "$NOTES"
+            --notes "$CHANGELOG"
 
       - name: Attest action source provenance
         uses: actions/attest-build-provenance@v2

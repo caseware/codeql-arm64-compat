@@ -1,0 +1,103 @@
+name: Re-attest historical releases
+
+# Temporary workflow: rebuilds the stub binary from historical release commits
+# and creates Sigstore attestations for each. This ensures ALL releases have
+# proper build-time provenance, eliminating the need for version-based cutoffs.
+#
+# Run once via workflow_dispatch for each tag, then delete this file.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to re-attest (e.g. v1.0.0)'
+        required: true
+        type: string
+      dry_run:
+        description: 'If true, build and attest but do not upload to release'
+        required: false
+        default: false
+        type: boolean
+
+permissions: {}
+
+jobs:
+  re-attest:
+    name: Re-build and attest ${{ inputs.tag }}
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Validate tag
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          if ! echo "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Invalid tag format: $TAG (expected vX.Y.Z)"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 1
+
+      - name: Install musl toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
+      - name: Build static ARM64 binary (identical flags to original build)
+        run: |
+          musl-gcc -static -O2 -s -o preload_tracer-arm64 src/stub-tracer.c
+          file preload_tracer-arm64
+          echo "New build SHA256:"
+          sha256sum preload_tracer-arm64
+
+      - name: Compare with existing release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          mkdir -p /tmp/existing
+          gh release download "$TAG" --pattern "preload_tracer-arm64" --dir /tmp/existing --clobber 2>/dev/null || true
+          if [ -f /tmp/existing/preload_tracer-arm64 ]; then
+            echo "Existing release asset SHA256:"
+            sha256sum /tmp/existing/preload_tracer-arm64
+            echo "New build SHA256:"
+            sha256sum preload_tracer-arm64
+            if cmp -s preload_tracer-arm64 /tmp/existing/preload_tracer-arm64; then
+              echo "Binaries are identical (reproducible build confirmed)"
+            else
+              echo "::warning::Binaries differ — compiler version on this runner may differ from original build. The new attested binary will replace the old one."
+            fi
+          else
+            echo "No existing release asset found for $TAG"
+          fi
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: preload_tracer-arm64
+
+      - name: Upload attested binary to existing release
+        if: inputs.dry_run != true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          echo "Uploading attested binary to release $TAG"
+          gh release upload "$TAG" preload_tracer-arm64 --clobber
+          echo "Done — release $TAG now has an attested binary."
+
+      - name: Verify attestation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          echo "Verifying attestation for the uploaded binary..."
+          gh attestation verify preload_tracer-arm64 --repo "${{ github.repository }}"
+          echo "Attestation verified successfully for $TAG"
