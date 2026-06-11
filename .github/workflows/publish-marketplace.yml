@@ -20,6 +20,8 @@ jobs:
     runs-on: ubuntu-24.04-arm
     permissions:
       contents: read
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v6
 
@@ -34,6 +36,11 @@ jobs:
           file preload_tracer-arm64
           sha256sum preload_tracer-arm64
 
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: preload_tracer-arm64
+
       - name: Upload stub tracer artifact
         uses: actions/upload-artifact@v4
         with:
@@ -45,6 +52,8 @@ jobs:
     runs-on: ubuntu-24.04-arm
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v6
         with:

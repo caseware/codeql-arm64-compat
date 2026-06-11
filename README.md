@@ -328,6 +328,44 @@ curl -sL https://cdimage.ubuntu.com/ubuntu-base/releases/22.04/release/ubuntu-ba
 export QEMU_LD_PREFIX=/tmp/x86_64-rootfs
 ```
 
+## Supply chain security
+
+The only binary artifact this action ships is the `preload_tracer-arm64` stub.
+Cryptographic provenance ensures it was built from this repository's source code
+by GitHub Actions — not tampered with after compilation.
+
+### Build-time attestation
+
+The `publish-marketplace.yml` workflow uses
+[`actions/attest-build-provenance@v2`](https://github.com/actions/attest-build-provenance)
+to create a [Sigstore](https://www.sigstore.dev/) attestation immediately after
+compiling the stub binary. The attestation binds the file's SHA-256 digest to:
+
+- The GitHub Actions workflow run (OIDC identity)
+- The source commit that triggered the build
+- The repository (`caseware/codeql-arm64-compat`)
+
+### Runtime enforcement
+
+When a consumer workflow runs this action on an ARM64 runner, the action:
+
+1. Downloads the `preload_tracer-arm64` binary from the GitHub Release
+2. **Verifies its attestation** via `gh attestation verify` against this repository
+3. Only if verification **succeeds** does it replace the CodeQL `preload_tracer`
+4. If verification **fails**, the action errors with a clear diagnostic and refuses to install the binary
+
+This means a compromised release asset (e.g. from a hijacked GitHub token or a
+man-in-the-middle on the download) will be rejected before it can execute.
+
+### Independent verification
+
+Anyone can verify the stub binary's provenance:
+
+```bash
+gh release download v1.2.0 --repo caseware/codeql-arm64-compat --pattern "preload_tracer-arm64"
+gh attestation verify preload_tracer-arm64 --repo caseware/codeql-arm64-compat
+```
+
 ## Contributing
 
 Issues and PRs welcome. The test suite validates across multiple CodeQL versions,

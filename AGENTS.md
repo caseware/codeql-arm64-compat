@@ -86,6 +86,13 @@ this workflow; it validates that the action works end-to-end on the code it ship
 | `.github/workflows/test.yml` | Compatibility matrix, SARIF check, performance report |
 | `.githooks/commit-msg` | Local commitlint hook |
 
+## Supply chain provenance
+
+The `preload_tracer-arm64` stub binary has build-time Sigstore attestation
+(`actions/attest-build-provenance@v2`) and runtime enforcement (`gh attestation
+verify` in `action.yml`). Any change to the build or release pipeline must
+preserve both. Do not remove or weaken attestation steps.
+
 ## What agents should not do
 
 - Do not use `ubuntu-latest` for jobs that can run on `ubuntu-24.04-arm`

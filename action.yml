@@ -380,16 +380,49 @@ runs:
         chmod +x "$DOWNLOAD_DIR/preload_tracer-arm64"
         echo "Downloaded stub from release $TAG"
 
+    - name: Verify stub provenance
+      id: verify-provenance
+      if: steps.arch.outputs.is_arm64 == 'true' && steps.stub-tag.outputs.tag != 'none'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REPO: ${{ steps.stub-tag.outputs.repo }}
+        STUB_PATH: ${{ runner.temp }}/preload_tracer-arm64
+      run: |
+        if [ ! -f "$STUB_PATH" ]; then
+          echo "::error::Stub binary not found at $STUB_PATH"
+          exit 1
+        fi
+
+        echo "::group::Verifying provenance attestation for preload_tracer-arm64"
+        echo "Binary SHA256: $(sha256sum "$STUB_PATH" | cut -d' ' -f1)"
+
+        if ! gh attestation verify "$STUB_PATH" --repo "$REPO" 2>&1; then
+          echo "::error::Provenance verification FAILED — the stub binary does not have a valid attestation from $REPO. This could indicate a supply chain compromise. Refusing to install."
+          echo "::endgroup::"
+          exit 1
+        fi
+
+        echo "Provenance verified: binary was built by GitHub Actions from $REPO"
+        echo "::endgroup::"
+
     - name: Replace preload_tracer with ARM64 stub
       if: steps.arch.outputs.is_arm64 == 'true'
       shell: bash
       env:
         CODEQL_DIR: ${{ steps.download.outputs.codeql-dir }}
         CACHED: ${{ runner.temp }}/preload_tracer-arm64
+        PROVENANCE_VERIFIED: ${{ steps.verify-provenance.outcome }}
       run: |
         TRACER="$CODEQL_DIR/tools/linux64/preload_tracer"
 
         if [ -f "$TRACER" ] && [ -f "$CACHED" ]; then
+          # Enforce provenance — refuse to install unverified binaries
+          if [ "$PROVENANCE_VERIFIED" != "success" ] && [ "$PROVENANCE_VERIFIED" != "" ]; then
+            echo "::error::Refusing to replace preload_tracer — provenance verification did not succeed (outcome: $PROVENANCE_VERIFIED)"
+            exit 1
+          fi
+
           echo "::group::Replacing preload_tracer with ARM64 stub"
           cp "$CACHED" "$TRACER"
           chmod +x "$TRACER"
