@@ -380,16 +380,58 @@ runs:
         chmod +x "$DOWNLOAD_DIR/preload_tracer-arm64"
         echo "Downloaded stub from release $TAG"
 
+    - name: Verify stub provenance
+      id: verify-provenance
+      if: steps.arch.outputs.is_arm64 == 'true' && steps.stub-tag.outputs.tag != 'none'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REPO: ${{ steps.stub-tag.outputs.repo }}
+        STUB_PATH: ${{ runner.temp }}/preload_tracer-arm64
+      run: |
+        if [ ! -f "$STUB_PATH" ]; then
+          echo "::error::Stub binary not found at $STUB_PATH"
+          exit 1
+        fi
+
+        echo "::group::Verifying provenance attestation for preload_tracer-arm64"
+        DIGEST=$(sha256sum "$STUB_PATH" | cut -d' ' -f1)
+        echo "Binary SHA256: $DIGEST"
+
+        VERIFY_OUTPUT=$(gh attestation verify "$STUB_PATH" --repo "$REPO" 2>&1) && RC=0 || RC=$?
+
+        if [ "$RC" -eq 0 ]; then
+          echo "provenance=verified" >> "$GITHUB_OUTPUT"
+          echo "Provenance verified: binary was built by GitHub Actions from $REPO"
+        elif echo "$VERIFY_OUTPUT" | grep -qi "no attestations found\|HTTP 404"; then
+          echo "provenance=none" >> "$GITHUB_OUTPUT"
+          echo "::warning::No attestation found for this release — binary predates provenance. Verification will be enforced for releases built with attestation support."
+        else
+          echo "provenance=failed" >> "$GITHUB_OUTPUT"
+          echo "$VERIFY_OUTPUT"
+          echo "::error::Provenance verification FAILED — attestation exists but does not match. This could indicate a supply chain compromise. Refusing to install."
+          echo "::endgroup::"
+          exit 1
+        fi
+
+        echo "::endgroup::"
+
     - name: Replace preload_tracer with ARM64 stub
       if: steps.arch.outputs.is_arm64 == 'true'
       shell: bash
       env:
         CODEQL_DIR: ${{ steps.download.outputs.codeql-dir }}
         CACHED: ${{ runner.temp }}/preload_tracer-arm64
+        PROVENANCE_STATUS: ${{ steps.verify-provenance.outputs.provenance }}
       run: |
         TRACER="$CODEQL_DIR/tools/linux64/preload_tracer"
 
         if [ -f "$TRACER" ] && [ -f "$CACHED" ]; then
+          if [ "$PROVENANCE_STATUS" = "failed" ]; then
+            echo "::error::Refusing to replace preload_tracer — provenance verification failed"
+            exit 1
+          fi
+
           echo "::group::Replacing preload_tracer with ARM64 stub"
           cp "$CACHED" "$TRACER"
           chmod +x "$TRACER"

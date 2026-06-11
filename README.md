@@ -328,6 +328,67 @@ curl -sL https://cdimage.ubuntu.com/ubuntu-base/releases/22.04/release/ubuntu-ba
 export QEMU_LD_PREFIX=/tmp/x86_64-rootfs
 ```
 
+## Supply chain security
+
+The only binary artifact this action ships is the `preload_tracer-arm64` stub.
+Cryptographic provenance ensures it was built from this repository's source code
+by GitHub Actions — not tampered with after compilation.
+
+### Build-time attestation
+
+The `publish-marketplace.yml` workflow uses
+[`actions/attest-build-provenance@v2`](https://github.com/actions/attest-build-provenance)
+to create a [Sigstore](https://www.sigstore.dev/) attestation immediately after
+compiling the stub binary. The attestation binds the file's SHA-256 digest to:
+
+- The GitHub Actions workflow run (OIDC identity)
+- The source commit that triggered the build
+- The repository (`caseware/codeql-arm64-compat`)
+
+The action source files (`action.yml`, `src/stub-tracer.c`, `patch-codeql.sh`)
+are also attested at release time for independent verification.
+
+### Runtime enforcement
+
+When a consumer workflow runs this action on an ARM64 runner, the action:
+
+1. Downloads the `preload_tracer-arm64` binary from the GitHub Release
+2. **Verifies its attestation** via `gh attestation verify` against this repository
+3. Only if verification **succeeds** does it replace the CodeQL `preload_tracer`
+4. If verification **fails** (attestation exists but doesn't match), the action
+   errors with a clear diagnostic and refuses to install the binary
+
+Releases that predate attestation support emit a warning instead of failing,
+allowing graceful adoption. Once a release is built with attestation, tampering
+is detected and blocked.
+
+### Fork safety
+
+When a fork uses `caseware/codeql-arm64-compat@v1`, `github.action_repository`
+resolves to the upstream repo. The stub binary is always downloaded from
+upstream releases and attestation is verified against the upstream repo — a
+fork cannot inject its own binary.
+
+The publish workflow only triggers on `push` to the `v1` branch (requires write
+access) or `workflow_dispatch` (also requires write access). There is no
+`pull_request_target` trigger. Forks cannot publish releases or create
+attestations in the upstream repo's name.
+
+### Independent verification
+
+Verify the stub binary:
+
+```bash
+gh release download v1.2.0 --repo caseware/codeql-arm64-compat --pattern "preload_tracer-arm64"
+gh attestation verify preload_tracer-arm64 --repo caseware/codeql-arm64-compat
+```
+
+Verify the action source:
+
+```bash
+gh attestation verify action.yml --repo caseware/codeql-arm64-compat
+```
+
 ## Contributing
 
 Issues and PRs welcome. The test suite validates across multiple CodeQL versions,
