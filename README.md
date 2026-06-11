@@ -358,10 +358,11 @@ When a consumer workflow runs this action on an ARM64 runner, the action:
 4. If verification **fails** (attestation exists but doesn't match), the action
    errors with a clear diagnostic and refuses to install the binary
 
-All releases have valid Sigstore attestations. If `gh attestation verify`
-fails for any reason (including "no attestations found"), the action refuses
-to install the binary — this indicates the binary digest has changed from what
-was built by GitHub Actions (possible tampering).
+Releases with attestation are verified; if verification fails (attestation
+exists but doesn't match), the action refuses to install the binary. Releases
+that predate attestation emit a warning. After running the `re-attest-releases`
+workflow for all historical tags, the warning path will be converted to a hard
+failure.
 
 ### Fork safety
 
