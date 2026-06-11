@@ -404,17 +404,10 @@ runs:
         if [ "$RC" -eq 0 ]; then
           echo "provenance=verified" >> "$GITHUB_OUTPUT"
           echo "Provenance verified: binary was built by GitHub Actions from $REPO"
-        elif echo "$VERIFY_OUTPUT" | grep -qiE "no attestations found|HTTP 404"; then
-          # No attestation exists for this digest. This occurs for releases
-          # that predate attestation support. Once the re-attest-releases
-          # workflow has been run for all historical releases, this branch
-          # should be converted to a hard failure.
-          echo "provenance=none" >> "$GITHUB_OUTPUT"
-          echo "::warning::No attestation found for release $RELEASE_TAG. Run the re-attest-releases workflow to create attestations for historical releases."
         else
           echo "provenance=failed" >> "$GITHUB_OUTPUT"
           echo "$VERIFY_OUTPUT"
-          echo "::error::Provenance verification FAILED for release $RELEASE_TAG (exit code $RC). The binary may have been tampered with. Refusing to install."
+          echo "::error::Provenance verification FAILED for release $RELEASE_TAG (exit code $RC). All releases must have valid Sigstore attestations. The binary may have been tampered with. Refusing to install."
           echo "::endgroup::"
           exit 1
         fi
