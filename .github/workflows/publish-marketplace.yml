@@ -161,6 +161,7 @@ jobs:
         env:
           TAG: ${{ steps.version.outputs.tag }}
           PREVIOUS_TAG: ${{ steps.previous.outputs.previous_tag }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           if [ -z "$PREVIOUS_TAG" ]; then
             RANGE="$TAG"
@@ -179,7 +180,8 @@ jobs:
           } > CHANGELOG.md
 
           # ── Commit signature chain ──
-          # Verify GPG/SSH signatures on every commit in the range.
+          # Verify signatures via the GitHub API (supports GPG, SSH, S/MIME
+          # without needing local keys or allowedSignersFile).
           echo ""
           echo "## Commit Signature Verification"
           echo "" >> CHANGELOG.md
@@ -188,32 +190,45 @@ jobs:
 
           UNSIGNED=0
           TOTAL=0
+          UNSIGNED_LIST=""
+          REPO="${GITHUB_REPOSITORY}"
+
           while IFS= read -r line; do
             SHA=$(echo "$line" | cut -d' ' -f1)
-            SIG_STATUS=$(echo "$line" | cut -d' ' -f2)
-            SUBJECT=$(echo "$line" | cut -d' ' -f3-)
+            SUBJECT=$(echo "$line" | cut -d' ' -f2-)
             TOTAL=$((TOTAL + 1))
 
-            case "$SIG_STATUS" in
-              G|U)
-                echo "  [SIGNED] $SHA $SUBJECT"
-                echo "* \`$SHA\` — **signed** — $SUBJECT" >> CHANGELOG.md
-                ;;
-              *)
-                echo "  [UNSIGNED] $SHA $SUBJECT"
-                echo "* \`$SHA\` — unsigned — $SUBJECT" >> CHANGELOG.md
-                UNSIGNED=$((UNSIGNED + 1))
-                ;;
-            esac
-          done < <(git log --first-parent --pretty='format:%H %G? %s' "$RANGE")
+            # Query GitHub API for signature verification status
+            API_RESPONSE=$(gh api "repos/${REPO}/commits/${SHA}" \
+              --jq '.commit.verification | "\(.verified) \(.reason)"' 2>&1) || true
 
+            VERIFIED=$(echo "$API_RESPONSE" | cut -d' ' -f1)
+            REASON=$(echo "$API_RESPONSE" | cut -d' ' -f2-)
+
+            if [ "$VERIFIED" = "true" ]; then
+              echo "  [VERIFIED] $SHA $SUBJECT"
+              echo "* \`$SHA\` — **verified** ($REASON) — $SUBJECT" >> CHANGELOG.md
+            else
+              echo "  [UNVERIFIED] $SHA (reason: $REASON) $SUBJECT"
+              echo "* \`$SHA\` — **UNVERIFIED** ($REASON) — $SUBJECT" >> CHANGELOG.md
+              UNSIGNED=$((UNSIGNED + 1))
+              UNSIGNED_LIST="${UNSIGNED_LIST}  - ${SHA} (${REASON}) ${SUBJECT}\n"
+            fi
+          done < <(git log --first-parent --pretty='format:%H %s' "$RANGE")
+
+          # Cryptographic chain summary
+          HEAD_SHA=$(git rev-parse HEAD)
           echo "" >> CHANGELOG.md
+          echo "**Release HEAD:** \`$HEAD_SHA\`" >> CHANGELOG.md
+          echo "" >> CHANGELOG.md
+
           if [ "$UNSIGNED" -gt 0 ]; then
-            echo "::warning::$UNSIGNED of $TOTAL commits in $RANGE are unsigned."
-            echo "> **Warning:** $UNSIGNED of $TOTAL commit(s) are unsigned." >> CHANGELOG.md
+            echo "::warning::$UNSIGNED of $TOTAL commits in $RANGE have unverified signatures."
+            printf "Unverified commits:\n%b" "$UNSIGNED_LIST"
+            echo "> ⚠ $UNSIGNED of $TOTAL commit(s) have unverified signatures." >> CHANGELOG.md
           else
-            echo "All $TOTAL commits are signed."
-            echo "> All $TOTAL commit(s) in this release have verified GPG signatures." >> CHANGELOG.md
+            echo "All $TOTAL commits have verified signatures."
+            echo "> All $TOTAL commit(s) in this release have GitHub-verified signatures." >> CHANGELOG.md
           fi
           echo "" >> CHANGELOG.md
 

@@ -92,8 +92,10 @@ The `preload_tracer-arm64` stub binary has build-time Sigstore attestation
 (`actions/attest-build-provenance@v2`) and runtime enforcement (`gh attestation
 verify` in `action.yml`). Each release also includes:
 
-- **Commit signature chain** — the changelog records GPG/SSH signature status
-  for every commit in the release range.
+- **Commit signature chain** — the changelog records GitHub-verified signature
+  status for every commit in the release range (via the GitHub API). Unsigned
+  commits are logged as warnings. Enforcement is handled by the repository
+  ruleset ("Require signed commits") which blocks unsigned pushes to `v1`.
 - **Signed changelog** — `CHANGELOG.md` is attested via Sigstore and attached
   to the release as a verifiable artifact.
 
