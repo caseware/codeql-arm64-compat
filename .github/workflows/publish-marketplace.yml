@@ -188,29 +188,40 @@ jobs:
 
           UNSIGNED=0
           TOTAL=0
+          UNSIGNED_LIST=""
           while IFS= read -r line; do
             SHA=$(echo "$line" | cut -d' ' -f1)
             SIG_STATUS=$(echo "$line" | cut -d' ' -f2)
-            SUBJECT=$(echo "$line" | cut -d' ' -f3-)
+            KEY_FP=$(echo "$line" | cut -d' ' -f3)
+            SUBJECT=$(echo "$line" | cut -d' ' -f4-)
             TOTAL=$((TOTAL + 1))
 
             case "$SIG_STATUS" in
               G|U)
-                echo "  [SIGNED] $SHA $SUBJECT"
-                echo "* \`$SHA\` — **signed** — $SUBJECT" >> CHANGELOG.md
+                echo "  [SIGNED] $SHA (key: $KEY_FP) $SUBJECT"
+                echo "* \`$SHA\` — **signed** (key \`$KEY_FP\`) — $SUBJECT" >> CHANGELOG.md
                 ;;
               *)
                 echo "  [UNSIGNED] $SHA $SUBJECT"
-                echo "* \`$SHA\` — unsigned — $SUBJECT" >> CHANGELOG.md
+                echo "* \`$SHA\` — **UNSIGNED** — $SUBJECT" >> CHANGELOG.md
                 UNSIGNED=$((UNSIGNED + 1))
+                UNSIGNED_LIST="${UNSIGNED_LIST}  - ${SHA} ${SUBJECT}\n"
                 ;;
             esac
-          done < <(git log --first-parent --pretty='format:%H %G? %s' "$RANGE")
+          done < <(git log --first-parent --pretty='format:%H %G? %GF %s' "$RANGE")
 
+          # Cryptographic chain summary: link HEAD commit hash to the signature verification
+          HEAD_SHA=$(git rev-parse HEAD)
           echo "" >> CHANGELOG.md
+          echo "**Release HEAD:** \`$HEAD_SHA\`" >> CHANGELOG.md
+          echo "" >> CHANGELOG.md
+
           if [ "$UNSIGNED" -gt 0 ]; then
-            echo "::warning::$UNSIGNED of $TOTAL commits in $RANGE are unsigned."
-            echo "> **Warning:** $UNSIGNED of $TOTAL commit(s) are unsigned." >> CHANGELOG.md
+            echo "::error::$UNSIGNED of $TOTAL commits in $RANGE are unsigned. All commits must be GPG-signed for provenance."
+            printf "Unsigned commits:\n%b" "$UNSIGNED_LIST"
+            echo "> **ERROR:** $UNSIGNED of $TOTAL commit(s) are unsigned." >> CHANGELOG.md
+            echo "::endgroup::"
+            exit 1
           else
             echo "All $TOTAL commits are signed."
             echo "> All $TOTAL commit(s) in this release have verified GPG signatures." >> CHANGELOG.md

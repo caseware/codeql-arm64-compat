@@ -93,7 +93,8 @@ The `preload_tracer-arm64` stub binary has build-time Sigstore attestation
 verify` in `action.yml`). Each release also includes:
 
 - **Commit signature chain** — the changelog records GPG/SSH signature status
-  for every commit in the release range.
+  and key fingerprint for every commit in the release range. **All commits
+  must be GPG-signed; unsigned commits cause a hard release failure.**
 - **Signed changelog** — `CHANGELOG.md` is attested via Sigstore and attached
   to the release as a verifiable artifact.
 
