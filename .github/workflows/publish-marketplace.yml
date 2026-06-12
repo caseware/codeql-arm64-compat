@@ -118,6 +118,7 @@ jobs:
         shell: bash
         env:
           TAG: ${{ steps.version.outputs.tag }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           CURRENT="${TAG#v}"
 
@@ -153,8 +154,6 @@ jobs:
 
           echo "previous_tag=$PREVIOUS_TAG" >> "$GITHUB_OUTPUT"
           echo "Previous release tag: ${PREVIOUS_TAG:-<none>}"
-        env:
-          GH_TOKEN: ${{ github.token }}
 
       - name: Generate changelog and verify commit signatures
         id: changelog
